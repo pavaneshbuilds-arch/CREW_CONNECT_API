@@ -1,0 +1,850 @@
+// Crew Connect — PostgreSQL schema (Prisma)
+// Relational, transactional core. High-volume logs/notifications live in MongoDB (see src/db/mongo).
+// Conventions mirror the schema design doc: auto-increment integer PKs, snake_case columns,
+// timestamptz audit columns, money as Decimal(10,2) in INR.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum AuthProvider {
+  phone_otp
+  google
+}
+
+enum AddressType {
+  home
+  work
+  other
+}
+
+enum Gender {
+  male
+  female
+  other
+}
+
+enum CrewRole {
+  waiter
+  supervisor
+  bouncer
+}
+
+enum VerificationStatus {
+  pending
+  approved
+  rejected
+}
+
+enum EditRequestStatus {
+  pending
+  approved
+  rejected
+}
+
+enum AdminRole {
+  super_admin
+  ops_admin
+}
+
+enum BookingStatus {
+  pending_payment
+  confirmed
+  crew_assigned
+  in_progress
+  completed
+  cancelled
+}
+
+enum AssignmentMethod {
+  self_assigned
+  admin_assigned
+}
+
+enum AssignmentStatus {
+  assigned
+  confirmed
+  cancelled_by_crew
+  no_show
+  in_progress
+  completed
+  removed_by_admin
+}
+
+enum PaymentType {
+  advance
+  balance
+  refund
+}
+
+enum PaymentStatus {
+  pending
+  success
+  failed
+  refunded
+}
+
+enum RefundStatus {
+  pending
+  processed
+  failed
+}
+
+enum WalletTxnType {
+  credit_earning
+  credit_bonus
+  debit_penalty
+  debit_redemption
+}
+
+enum PenaltyReason {
+  no_show
+  late_cancellation
+}
+
+enum DiscountType {
+  flat
+  percentage
+}
+
+enum AuditActionType {
+  crew_verified
+  crew_rejected
+  crew_assigned_manually
+  crew_reassigned
+  crew_removed
+  profile_edit_approved
+  profile_edit_rejected
+  rate_updated
+  supervisor_ranges_updated
+  coupon_created
+  coupon_updated
+  coupon_deleted
+  other
+}
+
+enum ReminderRecipientType {
+  user
+  crew
+}
+
+enum ReminderType {
+  ONE_DAY_BEFORE   @map("1_day_before")
+  TWO_HOURS_BEFORE @map("2_hours_before")
+}
+
+enum ReminderStatus {
+  pending
+  sent
+  failed
+}
+
+// Auth-support enum for the (added) OTP + refresh-token tables. Not in the original schema doc.
+enum AuthSubjectType {
+  user
+  crew
+  admin
+}
+
+// ---------------------------------------------------------------------------
+// 1. Identity & Auth
+// ---------------------------------------------------------------------------
+
+model User {
+  id                       Int          @id @default(autoincrement())
+  phoneNumber              String       @unique @map("phone_number") @db.VarChar(15)
+  email                    String?      @unique @db.VarChar(255)
+  fullName                 String?      @map("full_name") @db.VarChar(150)
+  profilePhotoUrl          String?      @map("profile_photo_url")
+  authProvider             AuthProvider @map("auth_provider")
+  googleId                 String?      @map("google_id") @db.VarChar(255)
+  isActive                 Boolean      @default(true) @map("is_active")
+  locationAccessEnabled    Boolean      @default(false) @map("location_access_enabled")
+  pushNotificationsEnabled Boolean      @default(true) @map("push_notifications_enabled")
+  marketingOptIn           Boolean      @default(false) @map("marketing_opt_in")
+  deletedAt                DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  createdAt                DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  addresses UserAddress[]
+  bookings  Booking[]
+  reviews   Review[]
+
+  @@map("users")
+}
+
+model UserAddress {
+  id                Int         @id @default(autoincrement())
+  userId            Int         @map("user_id")
+  houseFlatNumber   String?     @map("house_flat_number") @db.VarChar(50)
+  pincode           String?     @db.VarChar(10)
+  apartmentBuilding String?     @map("apartment_building") @db.VarChar(150)
+  contactNumber     String?     @map("contact_number") @db.VarChar(15)
+  floorNumber       String?     @map("floor_number") @db.VarChar(20)
+  landmark          String?     @db.VarChar(150)
+  addressType       AddressType @map("address_type")
+  latitude          Decimal?    @db.Decimal(9, 6)
+  longitude         Decimal?    @db.Decimal(9, 6)
+  isDefault         Boolean     @default(false) @map("is_default")
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_addresses")
+}
+
+model CrewMember {
+  id                 Int                @id @default(autoincrement())
+  phoneNumber        String             @unique @map("phone_number") @db.VarChar(15)
+  email              String?            @db.VarChar(255)
+  fullName           String?            @map("full_name") @db.VarChar(150)
+  profilePhotoUrl    String?            @map("profile_photo_url")
+  dateOfBirth        DateTime?          @map("date_of_birth") @db.Date
+  gender             Gender?
+  city               String?            @db.VarChar(100)
+  currentAddress     String?            @map("current_address")
+  primaryRole        CrewRole           @map("primary_role")
+  yearsOfExperience  Int?               @map("years_of_experience") @db.SmallInt
+  verificationStatus VerificationStatus @default(pending) @map("verification_status")
+  // Set when the crew finishes onboarding and calls POST /crew/me/submit.
+  // Null means they are still in signup and should not appear in the admin queue.
+  submittedAt        DateTime?          @map("submitted_at") @db.Timestamptz(6)
+  rejectionReason    String?            @map("rejection_reason")
+  ratingAvg          Decimal            @default(0) @map("rating_avg") @db.Decimal(2, 1)
+  isActive           Boolean            @default(true) @map("is_active")
+  isOnline           Boolean            @default(false) @map("is_online")
+  currentLatitude    Decimal?           @map("current_latitude") @db.Decimal(9, 6)
+  currentLongitude   Decimal?           @map("current_longitude") @db.Decimal(9, 6)
+  deletedAt          DateTime?          @map("deleted_at") @db.Timestamptz(6)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  languages           CrewLanguage[]
+  skills              CrewSkill[]
+  identityDocuments   CrewIdentityDocument[]
+  bankDetails         CrewBankDetail[]
+  profileEditRequests CrewProfileEditRequest[]
+  weeklyAvailability  CrewWeeklyAvailability[]
+  timeOff             CrewTimeOff[]
+  dateBlocks          CrewDateBlock[]
+  assignments         EventCrewAssignment[]
+  jobRejections       CrewJobRejection[]
+  wallet              CrewWallet?
+  penalties           CrewPenalty[]
+
+  @@map("crew_members")
+}
+
+model CrewLanguage {
+  id       Int    @id @default(autoincrement())
+  crewId   Int    @map("crew_id")
+  language String @db.VarChar(50)
+
+  crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  @@index([crewId])
+  @@map("crew_languages")
+}
+
+model CrewSkill {
+  id     Int    @id @default(autoincrement())
+  crewId Int    @map("crew_id")
+  skill  String @db.VarChar(100)
+
+  crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  @@index([crewId])
+  @@map("crew_skills")
+}
+
+model CrewIdentityDocument {
+  id                Int       @id @default(autoincrement())
+  crewId            Int       @map("crew_id")
+  aadhaarNumber     String?   @map("aadhaar_number")
+  aadhaarFrontUrl   String?   @map("aadhaar_front_url")
+  aadhaarBackUrl    String?   @map("aadhaar_back_url")
+  panNumber         String?   @map("pan_number")
+  panCardUrl        String?   @map("pan_card_url")
+  verifiedByAdminId Int?      @map("verified_by_admin_id")
+  verifiedAt        DateTime? @map("verified_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew            CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+  verifiedByAdmin Admin?     @relation(fields: [verifiedByAdminId], references: [id])
+
+  @@index([crewId])
+  @@map("crew_identity_documents")
+}
+
+model CrewBankDetail {
+  id                Int      @id @default(autoincrement())
+  crewId            Int      @map("crew_id")
+  accountHolderName String?  @map("account_holder_name") @db.VarChar(150)
+  accountNumber     String?  @map("account_number")
+  ifscCode          String?  @map("ifsc_code") @db.VarChar(15)
+  upiId             String?  @map("upi_id") @db.VarChar(100)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  @@index([crewId])
+  @@map("crew_bank_details")
+}
+
+model CrewProfileEditRequest {
+  id                Int               @id @default(autoincrement())
+  crewId            Int               @map("crew_id")
+  changedFields     Json              @map("changed_fields")
+  status            EditRequestStatus @default(pending)
+  reviewedByAdminId Int?              @map("reviewed_by_admin_id")
+  reviewedAt        DateTime?         @map("reviewed_at") @db.Timestamptz(6)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew            CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+  reviewedByAdmin Admin?     @relation(fields: [reviewedByAdminId], references: [id])
+
+  @@index([crewId])
+  @@map("crew_profile_edit_requests")
+}
+
+model Admin {
+  id           Int       @id @default(autoincrement())
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash")
+  fullName     String?   @map("full_name") @db.VarChar(150)
+  role         AdminRole @default(ops_admin)
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  auditLogs            AdminAuditLog[]
+  assignedAssignments  EventCrewAssignment[]
+  verifiedDocuments    CrewIdentityDocument[]
+  reviewedProfileEdits CrewProfileEditRequest[]
+  rateCardsUpdated     CrewRateCard[]          @relation("CrewRateCardUpdatedBy")
+  rateLogs             CrewRateLog[]           @relation("CrewRateLogChangedBy")
+
+  @@map("admins")
+}
+
+// ---------------------------------------------------------------------------
+// 2. Availability & Scheduling
+// ---------------------------------------------------------------------------
+
+model CrewWeeklyAvailability {
+  id          Int       @id @default(autoincrement())
+  crewId      Int       @map("crew_id")
+  dayOfWeek   Int       @map("day_of_week") @db.SmallInt // 0=Mon..6=Sun
+  isAvailable Boolean   @default(true) @map("is_available")
+  shiftStart  DateTime? @map("shift_start") @db.Time(6)
+  shiftEnd    DateTime? @map("shift_end") @db.Time(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  @@index([crewId])
+  @@map("crew_weekly_availability")
+}
+
+model CrewTimeOff {
+  id        Int      @id @default(autoincrement())
+  crewId    Int      @map("crew_id")
+  startDate DateTime @map("start_date") @db.Date
+  endDate   DateTime @map("end_date") @db.Date
+  reason    String?  @db.VarChar(150)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  @@index([crewId])
+  @@map("crew_time_off")
+}
+
+model CrewDateBlock {
+  id                Int      @id @default(autoincrement())
+  crewId            Int      @map("crew_id")
+  blockedDate       DateTime @map("blocked_date") @db.Date
+  eventAssignmentId Int?     @map("event_assignment_id")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew            CrewMember           @relation(fields: [crewId], references: [id], onDelete: Cascade)
+  eventAssignment EventCrewAssignment? @relation(fields: [eventAssignmentId], references: [id])
+
+  @@unique([crewId, blockedDate])
+  @@map("crew_date_blocks")
+}
+
+// ---------------------------------------------------------------------------
+// 3. Events / Bookings
+// ---------------------------------------------------------------------------
+
+model Booking {
+  id                     Int           @id @default(autoincrement())
+  bookingReference       String        @unique @map("booking_reference") @db.VarChar(20)
+  userId                 Int           @map("user_id")
+  eventType              String?       @map("event_type") @db.VarChar(100)
+  guestCount             Int?          @map("guest_count")
+  foodServiceType        String?       @map("food_service_type") @db.VarChar(50)
+  foodItemsCount         Int?          @map("food_items_count")
+  eventDate              DateTime?     @map("event_date") @db.Date
+  eventStartTime         DateTime?     @map("event_start_time") @db.Time(6)
+  expectedDurationHours  Decimal?      @map("expected_duration_hours") @db.Decimal(4, 1)
+  venueName              String?       @map("venue_name") @db.VarChar(200)
+  venueAddress           String?       @map("venue_address")
+  venueLatitude          Decimal?      @map("venue_latitude") @db.Decimal(9, 6)
+  venueLongitude         Decimal?      @map("venue_longitude") @db.Decimal(9, 6)
+  additionalInstructions String?       @map("additional_instructions")
+  status                 BookingStatus @default(pending_payment)
+  subtotal               Decimal?      @db.Decimal(10, 2)
+  gstAmount              Decimal?      @map("gst_amount") @db.Decimal(10, 2)
+  discountAmount         Decimal?      @map("discount_amount") @db.Decimal(10, 2)
+  estimatedTotal         Decimal?      @map("estimated_total") @db.Decimal(10, 2)
+  couponId               Int?          @map("coupon_id")
+  advancePaidPct         Decimal       @default(50.0) @map("advance_paid_pct") @db.Decimal(4, 1)
+  shiftOtp               String?       @map("shift_otp") @db.VarChar(4)
+  confirmedAt            DateTime?     @map("confirmed_at") @db.Timestamptz(6)
+  cancelledAt            DateTime?     @map("cancelled_at") @db.Timestamptz(6)
+  cancellationReason     String?       @map("cancellation_reason")
+  createdAt              DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user               User                     @relation(fields: [userId], references: [id])
+  coupon             Coupon?                  @relation(fields: [couponId], references: [id])
+  crewRequirements   BookingCrewRequirement[]
+  assignments        EventCrewAssignment[]
+  jobRejections      CrewJobRejection[]
+  payments           Payment[]
+  refunds            Refund[]
+  reviews            Review[]
+  scheduledReminders ScheduledReminder[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([eventDate])
+  @@index([couponId])
+  @@map("bookings")
+}
+
+model BookingCrewRequirement {
+  id            Int      @id @default(autoincrement())
+  bookingId     Int      @map("booking_id")
+  role          CrewRole
+  countRequired Int      @map("count_required")
+  rate          Decimal  @map("rate_per_hour") @db.Decimal(10, 2)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("booking_crew_requirements")
+}
+
+model EventCrewAssignment {
+  id                       Int              @id @default(autoincrement())
+  bookingId                Int              @map("booking_id")
+  crewId                   Int              @map("crew_id")
+  role                     CrewRole
+  assignmentMethod         AssignmentMethod @map("assignment_method")
+  assignedByAdminId        Int?             @map("assigned_by_admin_id")
+  status                   AssignmentStatus @default(assigned)
+  unavailabilityNotifiedAt DateTime?        @map("unavailability_notified_at") @db.Timestamptz(6)
+  shiftStartedAt           DateTime?        @map("shift_started_at") @db.Timestamptz(6)
+  shiftCompletedAt         DateTime?        @map("shift_completed_at") @db.Timestamptz(6)
+  earningsAmount           Decimal?         @map("earnings_amount") @db.Decimal(10, 2)
+  performanceBonus         Decimal          @default(0) @map("performance_bonus") @db.Decimal(10, 2)
+  reopenedForReassignment  Boolean          @default(false) @map("reopened_for_reassignment")
+  createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking            Booking             @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  crew               CrewMember          @relation(fields: [crewId], references: [id])
+  assignedByAdmin    Admin?              @relation(fields: [assignedByAdminId], references: [id])
+  dateBlocks         CrewDateBlock[]
+  walletTransactions WalletTransaction[]
+  penalties          CrewPenalty[]
+
+  @@unique([bookingId, crewId])
+  @@index([bookingId])
+  @@index([crewId])
+  @@index([status])
+  @@map("event_crew_assignments")
+}
+
+model CrewJobRejection {
+  id        Int      @id @default(autoincrement())
+  bookingId Int      @map("booking_id")
+  crewId    Int      @map("crew_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  booking Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  crew    CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, crewId])
+  @@index([crewId])
+  @@map("crew_job_rejections")
+}
+
+// ---------------------------------------------------------------------------
+// 4. Payments, Wallet, Penalties
+// ---------------------------------------------------------------------------
+
+model Payment {
+  id                Int           @id @default(autoincrement())
+  bookingId         Int           @map("booking_id")
+  paymentType       PaymentType   @map("payment_type")
+  amount            Decimal       @db.Decimal(10, 2)
+  status            PaymentStatus @default(pending)
+  paymentGatewayRef String?       @map("payment_gateway_ref") @db.VarChar(150)
+  paidAt            DateTime?     @map("paid_at") @db.Timestamptz(6)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  refunds Refund[]
+
+  @@index([bookingId])
+  @@map("payments")
+}
+
+model Refund {
+  id                          Int          @id @default(autoincrement())
+  bookingId                   Int          @map("booking_id")
+  paymentId                   Int?         @map("payment_id")
+  cancellationDaysBeforeEvent Decimal?     @map("cancellation_days_before_event") @db.Decimal(4, 1)
+  refundPctApplied            Decimal?     @map("refund_pct_applied") @db.Decimal(5, 2)
+  refundAmount                Decimal?     @map("refund_amount") @db.Decimal(10, 2)
+  status                      RefundStatus @default(pending)
+  createdAt                   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@index([bookingId])
+  @@map("refunds")
+}
+
+model CrewWallet {
+  id            Int      @id @default(autoincrement())
+  crewId        Int      @unique @map("crew_id")
+  balance       Decimal  @default(0) @db.Decimal(10, 2)
+  pendingPayout Decimal  @default(0) @map("pending_payout") @db.Decimal(10, 2)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew         CrewMember          @relation(fields: [crewId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+
+  @@map("crew_wallets")
+}
+
+model WalletTransaction {
+  id                Int           @id @default(autoincrement())
+  walletId          Int           @map("wallet_id")
+  eventAssignmentId Int?          @map("event_assignment_id")
+  type              WalletTxnType
+  amount            Decimal       @db.Decimal(10, 2)
+  balanceAfter      Decimal       @map("balance_after") @db.Decimal(10, 2)
+  description       String?
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  wallet          CrewWallet           @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  eventAssignment EventCrewAssignment? @relation(fields: [eventAssignmentId], references: [id])
+
+  @@index([walletId])
+  @@map("wallet_transactions")
+}
+
+model CrewPenalty {
+  id                Int           @id @default(autoincrement())
+  crewId            Int           @map("crew_id")
+  eventAssignmentId Int           @map("event_assignment_id")
+  reason            PenaltyReason
+  amount            Decimal       @db.Decimal(10, 2)
+  appliedAt         DateTime?     @map("applied_at") @db.Timestamptz(6)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew            CrewMember          @relation(fields: [crewId], references: [id])
+  eventAssignment EventCrewAssignment @relation(fields: [eventAssignmentId], references: [id])
+
+  @@index([crewId])
+  @@map("crew_penalties")
+}
+
+// ---------------------------------------------------------------------------
+// 5. Reviews & Coupons
+// ---------------------------------------------------------------------------
+
+model Review {
+  id             Int      @id @default(autoincrement())
+  bookingId      Int      @map("booking_id")
+  userId         Int      @map("user_id")
+  rating         Int      @db.SmallInt
+  wouldRecommend Boolean? @map("would_recommend")
+  reviewText     String?  @map("review_text")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([bookingId])
+  @@map("reviews")
+}
+
+model Coupon {
+  id                 Int          @id @default(autoincrement())
+  code               String       @unique @db.VarChar(30)
+  description        String?
+  discountType       DiscountType @map("discount_type")
+  discountValue      Decimal      @map("discount_value") @db.Decimal(10, 2)
+  minSpend           Decimal?     @map("min_spend") @db.Decimal(10, 2)
+  maxDiscountAmount  Decimal?     @map("max_discount_amount") @db.Decimal(10, 2)
+  maxUses            Int?         @map("max_uses")
+  maxUsesPerUser     Int?         @map("max_uses_per_user")
+  validFrom          DateTime?    @map("valid_from") @db.Timestamptz(6)
+  validUntil         DateTime?    @map("valid_until") @db.Timestamptz(6)
+  isActive           Boolean      @default(true) @map("is_active")
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  bookings Booking[]
+
+  @@map("coupons")
+}
+
+model CrewRateCard {
+  id               Int      @id @default(autoincrement())
+  role             CrewRole @unique
+  rate             Decimal  @map("rate_per_hour") @db.Decimal(10, 2)
+  updatedByAdminId Int?     @map("updated_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy Admin?        @relation("CrewRateCardUpdatedBy", fields: [updatedByAdminId], references: [id])
+  logs      CrewRateLog[]
+
+  @@map("crew_rate_cards")
+}
+
+model CrewRateLog {
+  id               Int      @id @default(autoincrement())
+  rateCardId       Int      @map("rate_card_id")
+  role             CrewRole
+  previousRate     Decimal  @map("previous_rate") @db.Decimal(10, 2)
+  newRate          Decimal  @map("new_rate") @db.Decimal(10, 2)
+  changedByAdminId Int      @map("changed_by_admin_id")
+  note             String?
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rateCard  CrewRateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade)
+  changedBy Admin        @relation("CrewRateLogChangedBy", fields: [changedByAdminId], references: [id])
+
+  @@index([rateCardId])
+  @@index([role])
+  @@index([createdAt])
+  @@map("crew_rate_logs")
+}
+
+model SupervisorStaffingRange {
+  id              Int      @id @default(autoincrement())
+  minWaiters      Int      @map("min_waiters")
+  maxWaiters      Int?     @map("max_waiters")
+  supervisorCount Int      @map("supervisor_count")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([minWaiters])
+  @@map("supervisor_staffing_ranges")
+}
+
+// ---------------------------------------------------------------------------
+// 6. Admin Audit
+// ---------------------------------------------------------------------------
+
+model AdminAuditLog {
+  id               Int             @id @default(autoincrement())
+  adminId          Int             @map("admin_id")
+  actionType       AuditActionType @map("action_type")
+  targetEntityType String?         @map("target_entity_type") @db.VarChar(50)
+  targetEntityId   Int?            @map("target_entity_id")
+  details          Json?
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  admin Admin @relation(fields: [adminId], references: [id])
+
+  @@index([adminId])
+  @@index([createdAt])
+  @@map("admin_audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// 7. Reminders
+// ---------------------------------------------------------------------------
+
+model ScheduledReminder {
+  id            Int                   @id @default(autoincrement())
+  bookingId     Int                   @map("booking_id")
+  recipientType ReminderRecipientType @map("recipient_type")
+  recipientId   Int                   @map("recipient_id") // polymorphic: users.id or crew_members.id
+  reminderType  ReminderType          @map("reminder_type")
+  scheduledAt   DateTime              @map("scheduled_at") @db.Timestamptz(6)
+  sentAt        DateTime?             @map("sent_at") @db.Timestamptz(6)
+  status        ReminderStatus        @default(pending)
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@index([status, scheduledAt])
+  @@map("scheduled_reminders")
+}
+
+// ---------------------------------------------------------------------------
+// Auth support (added — not in the original schema doc)
+// Backs phone-OTP verification and refresh-token rotation/revocation.
+// ---------------------------------------------------------------------------
+
+model OtpVerification {
+  id          Int             @id @default(autoincrement())
+  phoneNumber String          @map("phone_number") @db.VarChar(15)
+  subjectType AuthSubjectType @map("subject_type") // user | crew
+  codeHash    String          @map("code_hash")
+  attempts    Int             @default(0)
+  expiresAt   DateTime        @map("expires_at") @db.Timestamptz(6)
+  consumedAt  DateTime?       @map("consumed_at") @db.Timestamptz(6)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([phoneNumber, subjectType])
+  @@map("otp_verifications")
+}
+
+model RefreshToken {
+  id          Int             @id @default(autoincrement())
+  subjectType AuthSubjectType @map("subject_type")
+  subjectId   Int             @map("subject_id")
+  tokenHash   String          @unique @map("token_hash")
+  expiresAt   DateTime        @map("expires_at") @db.Timestamptz(6)
+  revokedAt   DateTime?       @map("revoked_at") @db.Timestamptz(6)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([subjectType, subjectId])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Mobile devices (user + crew apps)
+// `devices` = currently registered installs. `device_history` = every prior
+// (mid, pnid) attachment so we can see phones an account used before.
+// ---------------------------------------------------------------------------
+
+enum DeviceDetachReason {
+  token_rotated
+  unregistered
+  reassigned
+  replaced
+}
+
+model Device {
+  id          Int             @id @default(autoincrement())
+  subjectType AuthSubjectType @map("subject_type") // user | crew
+  subjectId   Int             @map("subject_id")
+  mid         String          @db.VarChar(255) // vendor/install/member id
+  pnid        String          @unique @db.VarChar(512) // current push token (FCM / OneSignal)
+  platform    String?         @db.VarChar(30) // android
+  deviceName  String?         @map("device_name") @db.VarChar(150)
+  osVersion   String?         @map("os_version") @db.VarChar(50)
+  appVersion  String?         @map("app_version") @db.VarChar(50)
+  lastSeenAt  DateTime        @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([mid])
+  @@index([subjectType, subjectId])
+  @@map("devices")
+}
+
+model DeviceHistory {
+  id          Int                @id @default(autoincrement())
+  subjectType AuthSubjectType    @map("subject_type")
+  subjectId   Int                @map("subject_id")
+  mid         String             @db.VarChar(255)
+  pnid        String             @db.VarChar(512)
+  platform    String?            @db.VarChar(30)
+  deviceName  String?            @map("device_name") @db.VarChar(150)
+  osVersion   String?            @map("os_version") @db.VarChar(50)
+  appVersion  String?            @map("app_version") @db.VarChar(50)
+  attachedAt  DateTime           @map("attached_at") @db.Timestamptz(6)
+  detachedAt  DateTime           @default(now()) @map("detached_at") @db.Timestamptz(6)
+  reason      DeviceDetachReason
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([subjectType, subjectId, detachedAt])
+  @@index([mid])
+  @@map("device_history")
+}
+
+// ---------------------------------------------------------------------------
+// Uploaded files (profile photos, KYC images). Stored on local disk in v1;
+// `url` is what mobile saves onto crew/user profile fields.
+// ---------------------------------------------------------------------------
+
+enum FilePurpose {
+  profile_photo
+  aadhaar_front
+  aadhaar_back
+  pan_card
+  other
+}
+
+model AppInstallToken {
+  id          Int       @id @default(autoincrement())
+  mid         String    @unique @db.VarChar(255)
+  tokenHash   String    @unique @map("token_hash") @db.VarChar(512)
+  platform    String?   @db.VarChar(30)
+  appVersion  String?   @map("app_version") @db.VarChar(50)
+  isRevoked   Boolean   @default(false) @map("is_revoked")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  lastUsedAt  DateTime? @map("last_used_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("app_install_tokens")
+}
+
+model UploadedFile {
+  id           Int             @id @default(autoincrement())
+  subjectType  AuthSubjectType @map("subject_type")
+  subjectId    Int             @map("subject_id")
+  purpose      FilePurpose
+  originalName String?         @map("original_name") @db.VarChar(255)
+  mimeType     String          @map("mime_type") @db.VarChar(100)
+  sizeBytes    Int             @map("size_bytes")
+  storageKey   String          @unique @map("storage_key") @db.VarChar(500)
+  url          String
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([subjectType, subjectId, purpose])
+  @@map("uploaded_files")
+}
