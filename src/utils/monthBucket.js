@@ -1,5 +1,5 @@
 /**
- * Returns the YYYY-MM bucket string used across MongoDB collections for
+ * Returns the YYYY-MM bucket string used on activity_logs for
  * month-wise querying/archival.
  */
 export default function monthBucket(date = new Date()) {

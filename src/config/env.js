@@ -50,7 +50,6 @@ const config = {
   apiPrefix: get('API_PREFIX', { fallback: '/api/v1' }),
 
   databaseUrl: get('DATABASE_URL', { required: true }),
-  mongoUri: get('MONGO_URI', { required: true }),
 
   jwt: {
     accessSecret: get('JWT_ACCESS_SECRET', { required: true }),

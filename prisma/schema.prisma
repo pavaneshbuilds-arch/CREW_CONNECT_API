@@ -1,7 +1,7 @@
 // Crew Connect — PostgreSQL schema (Prisma)
-// Relational, transactional core. High-volume logs/notifications live in MongoDB (see src/db/mongo).
-// Conventions mirror the schema design doc: auto-increment integer PKs, snake_case columns,
-// timestamptz audit columns, money as Decimal(10,2) in INR.
+// Single-database design: identity, bookings, payments, activity logs, notifications, SOS.
+// Conventions: auto-increment integer PKs, snake_case columns, timestamptz audit columns,
+// money as Decimal(10,2) in INR.
 
 generator client {
   provider = "prisma-client-js"
@@ -148,6 +148,31 @@ enum ReminderStatus {
   failed
 }
 
+enum ActivityLogCategory {
+  login
+  admin_action
+  payment
+  crew_redemption
+  crew_earning
+  penalty
+}
+
+enum ActivityActorType {
+  user
+  crew
+  admin
+  system
+}
+
+enum NotificationType {
+  booking_confirmed
+  crew_on_the_way
+  rate_experience
+  new_job_request
+  offer
+  reminder
+}
+
 // Auth-support enum for the (added) OTP + refresh-token tables. Not in the original schema doc.
 enum AuthSubjectType {
   user
@@ -242,6 +267,7 @@ model CrewMember {
   jobRejections       CrewJobRejection[]
   wallet              CrewWallet?
   penalties           CrewPenalty[]
+  sosContacts         CrewSosContact[]
 
   @@map("crew_members")
 }
@@ -847,4 +873,59 @@ model UploadedFile {
 
   @@index([subjectType, subjectId, purpose])
   @@map("uploaded_files")
+}
+
+// ---------------------------------------------------------------------------
+// Activity logs, notifications, SOS (moved from MongoDB)
+// Polymorphic actor/recipient ids are not FK-constrained (user | crew | admin | system).
+// ---------------------------------------------------------------------------
+
+model ActivityLog {
+  id                   Int                 @id @default(autoincrement())
+  category             ActivityLogCategory
+  actorType            ActivityActorType   @map("actor_type")
+  actorId              Int?                @map("actor_id")
+  action               String              @db.VarChar(100)
+  referenceEntityType  String?             @map("reference_entity_type") @db.VarChar(50)
+  referenceEntityId    Int?                @map("reference_entity_id")
+  metadata             Json?
+  monthBucket          String              @map("month_bucket") @db.VarChar(7) // YYYY-MM
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([monthBucket, category])
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+model Notification {
+  id                  Int               @id @default(autoincrement())
+  recipientType       AuthSubjectType   @map("recipient_type")
+  recipientId         Int               @map("recipient_id")
+  title               String            @db.VarChar(200)
+  body                String
+  type                NotificationType
+  referenceEntityType String?           @map("reference_entity_type") @db.VarChar(50)
+  referenceEntityId   Int?              @map("reference_entity_id")
+  isRead              Boolean           @default(false) @map("is_read")
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([recipientType, recipientId, createdAt])
+  @@index([recipientId, isRead])
+  @@map("notifications")
+}
+
+model CrewSosContact {
+  id        Int      @id @default(autoincrement())
+  crewId    Int      @map("crew_id")
+  name      String   @db.VarChar(150)
+  phone     String   @db.VarChar(15)
+  relation  String?  @db.VarChar(50)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+
+  @@index([crewId])
+  @@map("crew_sos_contacts")
 }

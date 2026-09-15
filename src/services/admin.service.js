@@ -4,7 +4,6 @@ import { prisma } from '../config/prisma.js';
 import ApiError from '../utils/apiError.js';
 import { decrypt, encrypt, maskTail } from '../utils/crypto.js';
 import { activityLogService } from './index.js';
-import ActivityLog from '../db/mongo/models/activityLog.model.js';
 
 function decimal(value) {
   if (value == null) return null;
@@ -890,32 +889,33 @@ class AdminService {
 
   async listActivityLogs(query) {
     const { page, limit, category, monthBucket, actorType } = query;
-    const filter = {};
-    if (category) filter.category = category;
-    if (monthBucket) filter.month_bucket = monthBucket;
-    if (actorType) filter.actor_type = actorType;
+    const where = {};
+    if (category) where.category = category;
+    if (monthBucket) where.monthBucket = monthBucket;
+    if (actorType) where.actorType = actorType;
 
     const [total, rows] = await Promise.all([
-      ActivityLog.countDocuments(filter),
-      ActivityLog.find(filter)
-        .sort({ created_at: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean(),
+      prisma.activityLog.count({ where }),
+      prisma.activityLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
     ]);
 
     return {
       items: rows.map((row) => ({
-        id: String(row._id),
+        id: row.id,
         category: row.category,
-        actorType: row.actor_type,
-        actorId: row.actor_id,
+        actorType: row.actorType,
+        actorId: row.actorId,
         action: row.action,
-        referenceEntityType: row.reference_entity_type,
-        referenceEntityId: row.reference_entity_id,
+        referenceEntityType: row.referenceEntityType,
+        referenceEntityId: row.referenceEntityId,
         metadata: row.metadata,
-        monthBucket: row.month_bucket,
-        createdAt: row.created_at,
+        monthBucket: row.monthBucket,
+        createdAt: row.createdAt,
       })),
       meta: paginationMeta({ page, limit, total }),
     };

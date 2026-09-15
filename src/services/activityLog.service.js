@@ -1,6 +1,12 @@
-import ActivityLog from '../db/mongo/models/activityLog.model.js';
+import { prisma } from '../config/prisma.js';
 import monthBucket from '../utils/monthBucket.js';
 import logger from '../utils/logger.js';
+
+function toOptionalInt(value) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+}
 
 class ActivityLogService {
   /**
@@ -12,24 +18,25 @@ class ActivityLogService {
    * @param {Object} entry
    * @param {'login'|'admin_action'|'payment'|'crew_redemption'|'crew_earning'|'penalty'} entry.category
    * @param {'user'|'crew'|'admin'|'system'} entry.actorType
-   * @param {string} [entry.actorId]
+   * @param {string|number} [entry.actorId]
    * @param {string} entry.action
    * @param {string} [entry.referenceEntityType]
-   * @param {string} [entry.referenceEntityId]
+   * @param {string|number} [entry.referenceEntityId]
    * @param {Object} [entry.metadata]
    */
   async record(entry) {
     try {
-      await ActivityLog.create({
-        category: entry.category,
-        actor_type: entry.actorType,
-        actor_id: entry.actorId,
-        action: entry.action,
-        reference_entity_type: entry.referenceEntityType,
-        reference_entity_id: entry.referenceEntityId,
-        metadata: entry.metadata,
-        month_bucket: monthBucket(),
-        created_at: new Date(),
+      await prisma.activityLog.create({
+        data: {
+          category: entry.category,
+          actorType: entry.actorType,
+          actorId: toOptionalInt(entry.actorId),
+          action: entry.action,
+          referenceEntityType: entry.referenceEntityType ?? null,
+          referenceEntityId: toOptionalInt(entry.referenceEntityId),
+          metadata: entry.metadata ?? undefined,
+          monthBucket: monthBucket(),
+        },
       });
     } catch (err) {
       logger.error('Failed to write activity log', { message: err.message, action: entry.action });

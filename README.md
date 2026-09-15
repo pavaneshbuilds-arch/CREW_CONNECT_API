@@ -8,34 +8,30 @@ Backend for **Crew Connect** — a service marketplace connecting event organize
 
 ## Architecture
 
-Hybrid two-database design:
-
-- **PostgreSQL** (via Prisma) — relational, transactional core: users, crew, bookings, payments, wallet, admin, audit.
-- **MongoDB** (via Mongoose) — high-volume, append-heavy data: activity logs (month-bucketed), notifications, SOS contacts.
+Single PostgreSQL database (via Prisma): users, crew, bookings, payments, wallet, admin, audit, activity logs (month-bucketed), notifications, and SOS contacts.
 
 ```
 src/
-├── config/          # env loading, Prisma + Mongo connections
+├── config/          # env loading, Prisma connection
 ├── routes/          # route definitions (index + per-domain route files)
 ├── controllers/     # thin HTTP handlers (parse request → call service → respond)
 ├── services/        # business logic (auth, tokens, crew, activity logging, SMS)
 ├── validations/     # Joi request schemas
 ├── middlewares/     # auth, validation, rate limiting, error handling
-├── db/mongo/models/ # Mongoose models (activity_logs, notifications, sos)
 ├── utils/           # errors, responses, jwt, otp, crypto, logger, helpers
 ├── app.js           # Express app wiring
-└── server.js        # bootstrap: connect DBs, start listening, graceful shutdown
+└── server.js        # bootstrap: connect DB, start listening, graceful shutdown
 ```
 
 Layered by responsibility: **routes** wire URLs to **controllers**, controllers delegate to **services** (all DB/business logic), and **validations** guard inputs before they reach controllers.
 
 Each route/controller/service is a **class** exported as a singleton instance. `routes/`, `controllers/`, and `services/` each expose a barrel `index.js`; cross-layer imports go **through the barrel** (e.g. controllers `import { crewService } from '../services/index.js'`), keeping wiring centralized.
 
-PostgreSQL table IDs are **auto-increment integers** (`SERIAL`). JWT `sub` is the string form of that integer and is parsed back to a number in auth middleware. Human-facing booking codes stay on `bookings.booking_reference` (e.g. `PC-88291`). Mongo documents store related ids as strings.
+PostgreSQL table IDs are **auto-increment integers** (`SERIAL`). JWT `sub` is the string form of that integer and is parsed back to a number in auth middleware. Human-facing booking codes stay on `bookings.booking_reference` (e.g. `PC-88291`).
 
 ## Tech stack
 
-Node.js (>=18, **ES modules**) · Express · Prisma (PostgreSQL) · Mongoose (MongoDB) · JWT · Joi · bcryptjs · google-auth-library
+Node.js (>=18, **ES modules**) · Express · Prisma (PostgreSQL) · JWT · Joi · bcryptjs · google-auth-library
 
 > **Note:** This repo requires **Node 18+** and uses native ESM (`"type": "module"`). If you use `nvm`: `nvm use 20`. Relative imports include explicit `.js` extensions as ESM requires.
 
@@ -46,7 +42,7 @@ Node.js (>=18, **ES modules**) · Express · Prisma (PostgreSQL) · Mongoose (Mo
 npm install
 
 # 2. Configure environment
-cp .env.example .env      # then edit DATABASE_URL, MONGO_URI, JWT secrets
+cp .env.example .env      # then edit DATABASE_URL, JWT secrets
 # Generate secrets:
 #   openssl rand -hex 32   # for JWT_ACCESS_SECRET / JWT_REFRESH_SECRET
 #   openssl rand -hex 32   # for ENCRYPTION_KEY (required to store crew PII/bank data)
@@ -197,7 +193,7 @@ Error:
 - **Crew login** creates a minimal record on first OTP verify; onboarding + admin verification (`verification_status`) gate full access.
 - **User login** also find-or-creates the organizer on first OTP / Google success; `GET/PATCH /users/me` and addresses complete Create Account. There is no admin approval for users.
 - Two auth-support tables (`otp_verifications`, `refresh_tokens`) were added on top of the original schema doc to back the OTP flow and refresh-token rotation.
-- All logins are recorded to the MongoDB `activity_logs` collection with a `month_bucket` for month-wise querying.
+- All logins are recorded to the PostgreSQL `activity_logs` table with a `month_bucket` for month-wise querying.
 
 ## Roadmap (next modules)
 

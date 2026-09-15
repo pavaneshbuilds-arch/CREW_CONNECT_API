@@ -2,13 +2,11 @@ import app from './app.js';
 import config from './config/env.js';
 import logger from './utils/logger.js';
 import { connectPostgres, disconnectPostgres } from './config/prisma.js';
-import { connectMongo, disconnectMongo } from './config/mongo.js';
 
 let server;
 
 async function start() {
   await connectPostgres();
-  await connectMongo();
 
   server = app.listen(config.port, () => {
     logger.info(`Crew Connect API listening on port ${config.port}`, {
@@ -21,7 +19,7 @@ async function start() {
 async function shutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully`);
   if (server) await new Promise((resolve) => server.close(resolve));
-  await Promise.allSettled([disconnectPostgres(), disconnectMongo()]);
+  await disconnectPostgres();
   process.exit(0);
 }
 

@@ -380,7 +380,7 @@ PostgreSQL admin actions. Query: `actionType`, `adminId`. `actionType` includes 
 
 ### `GET /admin/activity-logs`
 
-Mongo activity stream. Query: `category`, `monthBucket` (`YYYY-MM`), `actorType`.
+System activity stream (`activity_logs`). Query: `category`, `monthBucket` (`YYYY-MM`), `actorType`. IDs are integers.
 
 ---
 
