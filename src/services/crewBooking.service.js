@@ -96,11 +96,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function dayOfWeekFromYmd(ymd) {
-  const js = parseDateOnly(ymd).getUTCDay(); // 0 Sun .. 6 Sat
-  return js === 0 ? 6 : js - 1; // 0 Mon .. 6 Sun
-}
-
 function paginationMeta({ page, limit, total }) {
   return {
     page,
@@ -326,7 +321,7 @@ function serializeDetails(booking, { crew, assignment, coords }) {
       ? formatDurationFromMs(completedAt.getTime() - startedAt.getTime())
       : formatDuration(booking.expectedDurationHours);
 
-  const canAccept = status === 'new_request' && booking.status === 'confirmed' && crew.isOnline;
+  const canAccept = status === 'new_request' && booking.status === 'confirmed';
   const canReject = status === 'new_request';
   const canStartShift = status === 'accepted' && booking.status !== 'cancelled';
   const canComplete = status === 'in_progress';
@@ -443,16 +438,6 @@ function assertVisibleToCrew(booking, crew, assignment, rejected) {
   }
 }
 
-function availableOnWeekday(crewAvailability, eventDate) {
-  if (!crewAvailability?.length) return true;
-  const ymd = dateToIsoDate(eventDate);
-  if (!ymd) return true;
-  const day = dayOfWeekFromYmd(ymd);
-  const row = crewAvailability.find((item) => item.dayOfWeek === day);
-  if (!row) return true;
-  return row.isAvailable !== false;
-}
-
 async function excludedBookingIds(crewId) {
   const [rejected, assigned] = await Promise.all([
     prisma.crewJobRejection.findMany({ where: { crewId }, select: { bookingId: true } }),
@@ -469,8 +454,7 @@ function isOnTimeOff(timeOffRows, eventDate) {
 
 async function listOpenRequests(crew, { coords } = {}) {
   const excludeIds = await excludedBookingIds(crew.id);
-  const [availability, timeOffRows, dateBlocks] = await Promise.all([
-    prisma.crewWeeklyAvailability.findMany({ where: { crewId: crew.id } }),
+  const [timeOffRows, dateBlocks] = await Promise.all([
     prisma.crewTimeOff.findMany({ where: { crewId: crew.id }, select: { startDate: true, endDate: true } }),
     prisma.crewDateBlock.findMany({ where: { crewId: crew.id }, select: { blockedDate: true } }),
   ]);
@@ -493,7 +477,6 @@ async function listOpenRequests(crew, { coords } = {}) {
     if (openSlotsForRole(booking, crew.primaryRole) < 1) continue;
     if (isOnTimeOff(timeOffRows, booking.eventDate)) continue;
     if (blockedDates.has(dateToIsoDate(booking.eventDate))) continue;
-    if (!availableOnWeekday(availability, booking.eventDate)) continue;
     open.push(serializeListItem(booking, { role: crew.primaryRole, coords }));
   }
 
@@ -592,7 +575,7 @@ class CrewBookingService {
     const coords = coordsFrom(crew, query);
     const [today, requests, shift] = await Promise.all([
       todayStats(crew.id),
-      crew.isOnline ? listOpenRequests(crew, { coords }) : Promise.resolve([]),
+      listOpenRequests(crew, { coords }),
       activeShift(crew, coords),
     ]);
     return {
@@ -612,7 +595,7 @@ class CrewBookingService {
 
     let items;
     if (tab === 'requests') {
-      items = crew.isOnline ? await listOpenRequests(crew, { coords }) : [];
+      items = await listOpenRequests(crew, { coords });
     } else {
       items = await listMine(crew, { tab, coords });
     }
@@ -637,9 +620,6 @@ class CrewBookingService {
 
   async accept(crewId, bookingId) {
     const crew = await getApprovedCrew(crewId);
-    if (!crew.isOnline) {
-      throw ApiError.conflict('Go online to accept jobs', { code: 'CREW_OFFLINE' });
-    }
 
     const existing = await prisma.eventCrewAssignment.findUnique({
       where: { bookingId_crewId: { bookingId, crewId } },

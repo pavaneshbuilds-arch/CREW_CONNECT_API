@@ -52,11 +52,11 @@ Default port is `4000`. All JSON. Charset UTF-8.
 
 | HTTP | Typical `error.code` |
 |---|---|
-| 400 | `VALIDATION_ERROR`, `OTP_INVALID`, `OTP_EXPIRED`, `OTP_NOT_FOUND`, `PROFILE_INCOMPLETE`, `INVALID_FILE_TYPE`, `FILE_TOO_LARGE`, `FILE_REQUIRED`, `EVENT_DATE_INVALID`, `CREW_REQUIRED`, `COUPON_INVALID`, `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED`, `COUPON_USER_LIMIT`, `BOOKING_INCOMPLETE`, `SHIFT_OTP_INVALID` |
+| 400 | `VALIDATION_ERROR`, `OTP_INVALID`, `OTP_EXPIRED`, `OTP_NOT_FOUND`, `PROFILE_INCOMPLETE`, `INVALID_FILE_TYPE`, `FILE_TOO_LARGE`, `FILE_REQUIRED`, `EVENT_DATE_INVALID`, `CREW_REQUIRED`, `COUPON_INVALID`, `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED`, `COUPON_USER_LIMIT`, `BOOKING_INCOMPLETE`, `SHIFT_OTP_INVALID`, `VENUE_LOCATION_REQUIRED`, `VENUE_OUT_OF_RANGE` |
 | 401 | `NO_APP_TOKEN` (missing X-App-Token), `INVALID_APP_TOKEN` (bad/unknown token), `APP_TOKEN_EXPIRED` (re-register device), `APP_TOKEN_REVOKED` (device banned), `NO_TOKEN`, `INVALID_TOKEN` |
 | 403 | `FORBIDDEN_TYPE`, `ACCOUNT_SUSPENDED`, `ACCOUNT_DELETED`, `NOT_APPROVED` |
 | 404 | `ROUTE_NOT_FOUND`, `CREW_NOT_FOUND`, `USER_NOT_FOUND`, `ADDRESS_NOT_FOUND`, `BOOKING_NOT_FOUND` |
-| 409 | `PROFILE_LOCKED`, `ALREADY_APPROVED`, `NOT_APPROVED`, `UNIQUE_CONSTRAINT`, `PHONE_IN_USE`, `BOOKING_NOT_EDITABLE`, `BOOKING_NOT_CANCELLABLE`, `REVIEW_NOT_ALLOWED`, `REVIEW_ALREADY_EXISTS`, `CREW_OFFLINE`, `JOB_NOT_AVAILABLE`, `JOB_FULL`, `JOB_ALREADY_ACCEPTED`, `JOB_ALREADY_REJECTED`, `DATE_BLOCKED`, `SHIFT_NOT_STARTABLE`, `SHIFT_NOT_COMPLETABLE`, `BOOKING_CANCELLED` |
+| 409 | `PROFILE_LOCKED`, `ALREADY_APPROVED`, `NOT_APPROVED`, `UNIQUE_CONSTRAINT`, `PHONE_IN_USE`, `BOOKING_NOT_EDITABLE`, `BOOKING_NOT_CANCELLABLE`, `REVIEW_NOT_ALLOWED`, `REVIEW_ALREADY_EXISTS`, `JOB_NOT_AVAILABLE`, `JOB_FULL`, `JOB_ALREADY_ACCEPTED`, `JOB_ALREADY_REJECTED`, `DATE_BLOCKED`, `SHIFT_NOT_STARTABLE`, `SHIFT_NOT_COMPLETABLE`, `BOOKING_CANCELLED`, `CREW_SHORTAGE` |
 | 429 | `OTP_RATE_LIMITED`, `OTP_LOCKED` |
 
 Validation errors include `details`: `[{ "path": "phoneNumber", "message": "…" }]`.
@@ -65,11 +65,10 @@ Validation errors include `details`: `[{ "path": "phoneNumber", "message": "…"
 
 - Table IDs are **integers** (`1`, `2`, `3`).
 - Dates: `YYYY-MM-DD`. Date-times: ISO-8601.
-- Times (availability): `HH:mm` 24-hour (`"18:00"`).
+- Times: `HH:mm` 24-hour (`"18:00"`).
 - Money: decimal strings / numbers in **INR**.
 - OTP: **4 digits**. TTL **300 seconds**. Max **5** wrong attempts, then request a new OTP.
   In development, **crew** (`subjectType: "crew"`) may enter any 4-digit code after requesting an OTP. Production always checks the real code.
-- `dayOfWeek`: `0` = Monday … `6` = Sunday.
 
 ### Tokens
 
@@ -99,7 +98,7 @@ Use this to wire screens that already exist in design.
 | Complete Account — Personal Information | `POST /uploads` (`purpose=profile_photo`) then `PATCH /crew/me/personal` with `profilePhotoUrl` |
 | Complete Account — Work Profile | `PUT /crew/me/work-profile` |
 | Complete Account — Identity Verification | `POST /uploads` for each doc, then `PUT /crew/me/identity-documents` with the returned URLs |
-| Complete Account — Bank + Availability | `PUT /crew/me/bank-details` then `PUT /crew/me/availability` |
+| Complete Account — Bank | `PUT /crew/me/bank-details` |
 | Create Profile / finish onboarding | `POST /crew/me/submit` |
 | Verification in Progress | `GET /crew/me` — poll `verificationStatus` |
 | Home — Online / Offline | `PATCH /crew/me/online` then `GET /crew/home` |
@@ -111,7 +110,6 @@ Use this to wire screens that already exist in design.
 | Shift OTP | `POST /crew/bookings/:id/start` with `{ "code" }`. Resend → `POST /crew/bookings/:id/otp/resend` |
 | Shift In Progress | `GET /crew/bookings/:id` (poll). Complete → `POST /crew/bookings/:id/complete` |
 | Shift Completed | `GET /crew/bookings/:id` (`status: "completed"`) |
-| Availability / Working hours | `GET` + `PUT /crew/me/availability` |
 | Mark dates off / vacation | `GET/POST/DELETE /crew/me/time-off` |
 | Account / Profile | `GET /crew/me` |
 | Edit Profile (while pending/rejected) | Same PATCH/PUT as onboarding |
@@ -697,10 +695,18 @@ Create or update the cart draft. **201** when a new booking is created, **200** 
 
 `expectedDurationHours` is a number from **1 to 24** (one decimal allowed). It is **not** used in the quote. `eventDate` is `YYYY-MM-DD` (not in the past). `eventStartTime` is `HH:mm`. At least one crew count must be greater than 0.
 
+When the API has a service-area center configured, `venueLatitude` and `venueLongitude` are required. The venue must be within **50 km** of Hyderabad. **400 `VENUE_LOCATION_REQUIRED`** if either coordinate is missing. **400 `VENUE_OUT_OF_RANGE`** if Haversine distance is greater than the radius (`details.distanceKm`, `details.maxKm`). The same check runs on `POST /users/bookings/:id/place`.
+
+Supervisor count is raised to the admin waiter-range minimum for the submitted waiter count (`GET /users/bookings/options` → `supervisorRanges`). If the organizer sends a **higher** supervisor count, that value is kept. The saved draft, quote, and `data.crew` use the **server** counts — the app should display those, not the request body.
+
+The success envelope `message` (also on `data.message`) is meant for an in-app notice. If supervisors were raised: `"Supervisor count was updated to 1 Supervisor for 5 Waiters. Your booking now includes 5 Waiters and 1 Supervisor."` Otherwise: `"Your booking includes 5 Waiters and 1 Supervisor."`
+
 Response (same shape as Cart). `rates` are the snapshotted per-person event amounts. Each line is `count × rate`:
 
 ```json
 {
+  "success": true,
+  "message": "Supervisor count was updated to 1 Supervisor for 5 Waiters. Your booking now includes 5 Waiters and 1 Supervisor.",
   "data": {
     "id": 12,
     "bookingReference": "PC-96891",
@@ -719,6 +725,7 @@ Response (same shape as Cart). `rates` are the snapshotted per-person event amou
     "additionalInstructions": "Use the banquet hall entrance",
     "crew": { "waiter": 5, "supervisor": 1, "bouncer": 0 },
     "staffCount": 6,
+    "message": "Supervisor count was updated to 1 Supervisor for 5 Waiters. Your booking now includes 5 Waiters and 1 Supervisor.",
     "rates": { "waiter": 800, "supervisor": 1000 },
     "lineItems": [
       {
@@ -766,7 +773,25 @@ Removes the offer and recalculates totals.
 
 ### `POST /users/bookings/:id/place`
 
-**Temporary stand-in for the payment gateway.** Sets status to `confirmed`, stores `confirmedAt`, generates a 4-digit `shiftOtp`. No `Payment` row is written. **409 `BOOKING_NOT_EDITABLE`** if not `pending_payment`.
+**Temporary stand-in for the payment gateway.** Sets status to `confirmed`, stores `confirmedAt`, generates a 4-digit `shiftOtp`. No `Payment` row is written. **409 `BOOKING_NOT_EDITABLE`** if not `pending_payment`. Re-checks the Hyderabad 50 km venue rule (**400 `VENUE_LOCATION_REQUIRED`** / **400 `VENUE_OUT_OF_RANGE`**).
+
+Before confirming, the API counts **approved, active** crew for each required role who are free on the event date (not already assigned to another event, not on time off). Unfilled slots on other **confirmed / crew_assigned / in_progress** bookings for that date also reserve capacity, even if nobody has accepted yet. If any role is short, it returns **409 `CREW_SHORTAGE`** and does not place the order.
+
+```json
+{
+  "success": false,
+  "error": {
+    "message": "1 Waiter shortage, 2 Bouncers shortage",
+    "code": "CREW_SHORTAGE",
+    "details": {
+      "shortages": [
+        { "role": "waiter", "label": "Waiter", "required": 5, "available": 4, "shortage": 1 },
+        { "role": "bouncer", "label": "Bouncers", "required": 3, "available": 1, "shortage": 2 }
+      ]
+    }
+  }
+}
+```
 
 ### `GET /users/bookings`
 
@@ -865,9 +890,6 @@ After `approved`, those endpoints return **409 `PROFILE_LOCKED`**. Use **Request
       "ifscCode": "HDFC0001234",
       "upiId": "maxwell@okhdfc"
     },
-    "availability": [
-      { "dayOfWeek": 3, "isAvailable": true, "shiftStart": "18:00", "shiftEnd": "23:00" }
-    ],
     "timeOff": [
       { "id": 3, "startDate": "2026-12-24", "endDate": "2026-12-26", "reason": "Christmas Break" }
     ]
@@ -977,29 +999,9 @@ Then show **Verification in Progress**. Refresh with `GET /crew/me` until `appro
 
 ---
 
-## 7. Availability, time off, online
+## 7. Time off, online
 
-### `GET /crew/me/availability`
-
-Array of `{ dayOfWeek, isAvailable, shiftStart, shiftEnd }`.
-
-### `PUT /crew/me/availability`
-
-**Replaces the whole week.** Send all days the user selected.
-
-```json
-{
-  "days": [
-    { "dayOfWeek": 0, "isAvailable": false, "shiftStart": null, "shiftEnd": null },
-    { "dayOfWeek": 3, "isAvailable": true, "shiftStart": "18:00", "shiftEnd": "23:00" },
-    { "dayOfWeek": 4, "isAvailable": true, "shiftStart": "18:00", "shiftEnd": "23:00" }
-  ]
-}
-```
-
-Preferred shift (Morning / Evening) is **not** a separate field — encode it as `shiftStart` / `shiftEnd`.
-
----
+Weekly availability is **not stored**. Open jobs appear unless the crew member is on time off or already booked that date. Online/offline is stored (`PATCH /crew/me/online`) but does **not** filter the job list.
 
 ### Time off (vacation / special dates)
 
@@ -1039,7 +1041,7 @@ Preferred shift (Morning / Evening) is **not** a separate field — encode it as
 
 All routes: Bearer + token `type` must be `"crew"`. Profile must be **approved** (`403 NOT_APPROVED` otherwise).
 
-After an organizer confirms a booking (`POST /users/bookings/:id/place`), it is broadcast to **approved, online** crew whose `primaryRole` still has an open slot. Pay is **this crew member’s** fixed event rate from the admin rate card (snapshotted on the booking), not hours × rate and not the organizer’s `estimatedTotal`. Hours are shown on the order for the shift length only.
+After an organizer confirms a booking (`POST /users/bookings/:id/place`), it is broadcast to **approved** crew whose `primaryRole` still has an open slot. Pay is **this crew member’s** fixed event rate from the admin rate card (snapshotted on the booking), not hours × rate and not the organizer’s `estimatedTotal`. Hours are shown on the order for the shift length only.
 
 Crew-facing `status` values: `new_request` → `accepted` → `in_progress` → `completed` (or `cancelled`).
 
@@ -1047,7 +1049,7 @@ The 4-digit **shift OTP** is generated when the organizer places the booking and
 
 ### `GET /crew/home`
 
-Home screen. Offline → `requests: []` and show Today’s Performance. Online → New Job Requests. If a shift is already running, `activeShift` is the in-progress detail payload (else `null`).
+Home screen. `requests` lists open jobs regardless of online/offline. `isOnline` is still returned for the toggle UI. If a shift is already running, `activeShift` is the in-progress detail payload (else `null`).
 
 Optional query: `latitude` + `longitude` together (otherwise stored location from `PATCH /crew/me/online` is used for `distanceKm`).
 
@@ -1181,9 +1183,9 @@ On **completed**, `payout` and `performance` are filled (rating comes from the o
 
 ### `POST /crew/bookings/:id/accept`
 
-No body. Crew must be **online**. Creates a `self_assigned` assignment, blocks that event date, and fills the role slot. When every role is filled the booking becomes `crew_assigned`.
+No body. Creates a `self_assigned` assignment, blocks that event date, and fills the role slot. When every role is filled the booking becomes `crew_assigned`.
 
-**409** `CREW_OFFLINE` / `JOB_FULL` / `JOB_NOT_AVAILABLE` / `JOB_ALREADY_ACCEPTED` / `JOB_ALREADY_REJECTED` / `DATE_BLOCKED` / `BOOKING_CANCELLED`.
+**409** `JOB_FULL` / `JOB_NOT_AVAILABLE` / `JOB_ALREADY_ACCEPTED` / `JOB_ALREADY_REJECTED` / `DATE_BLOCKED` / `BOOKING_CANCELLED`.
 
 Response is the same detail payload (`status: "accepted"`).
 
@@ -1273,7 +1275,7 @@ GET /crew/me
     POST /uploads (photo) → PATCH personal
     PUT work-profile
     POST /uploads (aadhaar/pan) → PUT identity
-    PUT bank → PUT availability
+    PUT bank
     POST /crew/me/submit → Verification in Progress
   verificationStatus pending → Verification in Progress (poll GET /crew/me)
   rejected → show rejectionReason, allow edit + submit again
@@ -1285,7 +1287,7 @@ GET /crew/me
     Start Shift OTP → POST /crew/bookings/:id/start { code }
     Resend code → POST /crew/bookings/:id/otp/resend
     Shift In Progress / Complete → GET /crew/bookings/:id ; POST /crew/bookings/:id/complete
-    Availability screen → GET/PUT availability + time-off
+    Time off → GET/POST/DELETE /crew/me/time-off
     Account → GET /crew/me
     Logout → POST /auth/logout
 ```
@@ -1365,7 +1367,7 @@ Delete Account → DELETE /users/me
 - [ ] Do not display full Aadhaar / account number (API will not return them)
 - [ ] Booking cart is a single `pending_payment` draft; `PUT /users/bookings/summary` both creates and edits it
 - [ ] `POST /users/bookings/:id/place` is the stand-in until the payment gateway exists
-- [ ] Crew Home: `GET /crew/home` after `PATCH /crew/me/online`. Offline shows `today` stats; online shows `requests`
+- [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.
 - [ ] Crew job `id` is the integer booking id; `orderId` / `bookingReference` is the human code on the header
 - [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. Shift OTP is the organizer’s 4-digit `shiftOtp`, not the login OTP
 - [ ] Drive Accept / Reject / Start / Complete buttons from `actions` on `GET /crew/bookings/:id`

@@ -95,6 +95,12 @@ const config = {
     gstPercent: getNumber('GST_PERCENT', { fallback: 18 }),
   },
 
+  serviceArea: {
+    latitude: getNumber('SERVICE_CENTER_LAT', { fallback: undefined }),
+    longitude: getNumber('SERVICE_CENTER_LNG', { fallback: undefined }),
+    radiusKm: getNumber('SERVICE_RADIUS_KM', { fallback: 50 }),
+  },
+
   cors: {
     // Comma-separated list of allowed origins for the admin web app, etc.
     origins: get('CORS_ORIGINS', { fallback: '*' })

@@ -1,9 +1,5 @@
 import Joi from 'joi';
 
-const timeString = Joi.string()
-  .pattern(/^([01]\d|2[0-3]):[0-5]\d$/)
-  .messages({ 'string.pattern.base': 'time must be in HH:mm 24-hour format' });
-
 const role = Joi.string().valid('waiter', 'supervisor', 'bouncer');
 const gender = Joi.string().valid('male', 'female', 'other');
 
@@ -48,23 +44,6 @@ export const upsertBankDetails = {
     accountNumber: Joi.string().pattern(/^\d{6,20}$/).required().messages({ 'string.pattern.base': 'accountNumber must be 6–20 digits' }),
     ifscCode: Joi.string().pattern(/^[A-Z]{4}0[A-Z0-9]{6}$/).required().messages({ 'string.pattern.base': 'ifscCode must be a valid IFSC (e.g. HDFC0001234)' }),
     upiId: Joi.string().max(100).allow(null, ''),
-  }),
-};
-
-// Weekly availability — full-week replace
-export const replaceAvailability = {
-  body: Joi.object({
-    days: Joi.array()
-      .items(
-        Joi.object({
-          dayOfWeek: Joi.number().integer().min(0).max(6).required(), // 0=Mon..6=Sun
-          isAvailable: Joi.boolean().default(true),
-          shiftStart: timeString.allow(null),
-          shiftEnd: timeString.allow(null),
-        })
-      )
-      .max(7)
-      .required(),
   }),
 };
 

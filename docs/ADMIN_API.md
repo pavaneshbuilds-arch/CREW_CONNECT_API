@@ -132,7 +132,7 @@ Query: `search`, `verificationStatus` (`pending` \| `approved` \| `rejected`), `
 
 ### `GET /admin/crew/:id`
 
-Full review payload. Identity numbers and bank account are **masked** (last 4). Document image URLs are included so the console can show KYC photos.
+Full review payload. Identity numbers and bank account include both **masked** (last 4) and full decrypted values (`aadhaarNumber`, `panNumber`, `accountNumber`) so the console can reveal them. Document image URLs are included so the console can show KYC photos.
 
 ### `POST /admin/crew/:id/approve`
 

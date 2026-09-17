@@ -12,9 +12,9 @@ class BookingController {
   });
 
   upsertSummary = catchAsync(async (req, res) => {
-    const { data, created: isNew } = await bookingService.upsertSummary(req.auth.sub, req.body);
-    if (isNew) return created(res, data, { message: 'Booking summary saved' });
-    return success(res, data, { message: 'Booking summary updated' });
+    const { data, created: isNew, message } = await bookingService.upsertSummary(req.auth.sub, req.body);
+    if (isNew) return created(res, data, { message });
+    return success(res, data, { message });
   });
 
   getCart = catchAsync(async (req, res) => {

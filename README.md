@@ -3,7 +3,7 @@
 Backend for **Crew Connect** — a service marketplace connecting event organizers with staffing crew (waiters, supervisors, bouncers). This API serves three clients:
 
 - **User mobile app** (Android) — event organizers book crew
-- **Crew mobile app** (Android) — crew manage availability, assignments, earnings
+- **Crew mobile app** (Android) — crew manage assignments, earnings, and online status
 - **Admin web app** (React) — platform management, verification, oversight
 
 ## Architecture
@@ -93,7 +93,7 @@ All `/api/v1/admin/*` routes require an **admin** access token. Creating/updatin
 | GET | `/api/v1/admin/me` | Signed-in admin profile |
 | GET | `/api/v1/admin/dashboard` | Counts for the home screen |
 | GET | `/api/v1/admin/crew` | List / filter crew (verification queue) |
-| GET | `/api/v1/admin/crew/:id` | Full crew review (KYC images, masked PII) |
+| GET | `/api/v1/admin/crew/:id` | Full crew review (KYC images, masked + full PII) |
 | POST | `/api/v1/admin/crew/:id/approve` | Approve a pending profile |
 | POST | `/api/v1/admin/crew/:id/reject` | Reject with a reason |
 | PATCH | `/api/v1/admin/crew/:id/active` | Suspend / reactivate |
@@ -136,7 +136,6 @@ All routes require a **crew** access token (`Authorization: Bearer …`) and act
 | PUT | `/api/v1/crew/me/identity-documents` | Step 3 — Aadhaar/PAN (encrypted at rest) |
 | PUT | `/api/v1/crew/me/bank-details` | Bank details (account no. encrypted at rest) |
 | POST | `/api/v1/crew/me/submit` | Submit completed profile for admin verification |
-| GET/PUT | `/api/v1/crew/me/availability` | Weekly availability (full-week replace) |
 | GET/POST | `/api/v1/crew/me/time-off` | List / add time-off (vacation, special dates off) |
 | DELETE | `/api/v1/crew/me/time-off/:id` | Remove a time-off entry |
 | PATCH | `/api/v1/crew/me/online` | Online/offline toggle (+ optional location) |

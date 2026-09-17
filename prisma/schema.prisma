@@ -260,7 +260,6 @@ model CrewMember {
   identityDocuments   CrewIdentityDocument[]
   bankDetails         CrewBankDetail[]
   profileEditRequests CrewProfileEditRequest[]
-  weeklyAvailability  CrewWeeklyAvailability[]
   timeOff             CrewTimeOff[]
   dateBlocks          CrewDateBlock[]
   assignments         EventCrewAssignment[]
@@ -368,24 +367,8 @@ model Admin {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Availability & Scheduling
+// 2. Scheduling
 // ---------------------------------------------------------------------------
-
-model CrewWeeklyAvailability {
-  id          Int       @id @default(autoincrement())
-  crewId      Int       @map("crew_id")
-  dayOfWeek   Int       @map("day_of_week") @db.SmallInt // 0=Mon..6=Sun
-  isAvailable Boolean   @default(true) @map("is_available")
-  shiftStart  DateTime? @map("shift_start") @db.Time(6)
-  shiftEnd    DateTime? @map("shift_end") @db.Time(6)
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
-
-  @@index([crewId])
-  @@map("crew_weekly_availability")
-}
 
 model CrewTimeOff {
   id        Int      @id @default(autoincrement())

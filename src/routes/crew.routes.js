@@ -24,9 +24,7 @@ class CrewRoutes {
     this.router.put('/me/bank-details', validate(schema.upsertBankDetails), crewController.upsertBankDetails);
     this.router.post('/me/submit', crewController.submitForVerification);
 
-    // --- Availability ---
-    this.router.get('/me/availability', crewController.getAvailability);
-    this.router.put('/me/availability', validate(schema.replaceAvailability), crewController.replaceAvailability);
+    // --- Time off ---
     this.router.get('/me/time-off', crewController.listTimeOff);
     this.router.post('/me/time-off', validate(schema.addTimeOff), crewController.addTimeOff);
     this.router.delete('/me/time-off/:id', validate(schema.timeOffParam), crewController.deleteTimeOff);

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { prisma } from '../config/prisma.js';
+import config from '../config/env.js';
 import {
   COVER_RATIO,
   CREW_ROLES,
@@ -10,6 +11,7 @@ import {
   ROLE_LABELS,
   getGstPercent,
   suggestCrew,
+  supervisorCountForWaiters,
 } from '../config/pricing.js';
 import ApiError from '../utils/apiError.js';
 import { generateOtp } from '../utils/otp.js';
@@ -19,6 +21,7 @@ const CURRENT_STATUSES = ['confirmed', 'crew_assigned', 'in_progress'];
 const PAST_STATUSES = ['completed', 'cancelled'];
 const OTP_VISIBLE_STATUSES = ['confirmed', 'crew_assigned', 'in_progress'];
 const CANCELLABLE_STATUSES = ['confirmed', 'crew_assigned'];
+const SLOT_STATUSES = ['assigned', 'confirmed', 'in_progress', 'completed'];
 const CANCEL_FEE_HOURS = 24;
 const CANCEL_FEE_PCT = 50;
 
@@ -85,6 +88,25 @@ function roleLabel(role, count) {
   return count === 1 ? labels.singular : labels.plural;
 }
 
+function formatCrewCounts(crewCounts) {
+  const parts = CREW_ROLES.filter((role) => crewCounts[role] > 0).map(
+    (role) => `${crewCounts[role]} ${roleLabel(role, crewCounts[role])}`
+  );
+  if (!parts.length) return 'no crew';
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+function crewSummaryMessage(crewCounts, { supervisorAdjusted, minSupervisors } = {}) {
+  const countsText = formatCrewCounts(crewCounts);
+  if (supervisorAdjusted) {
+    const waiterText = `${crewCounts.waiter} ${roleLabel('waiter', crewCounts.waiter)}`;
+    const supervisorText = `${minSupervisors} ${roleLabel('supervisor', minSupervisors)}`;
+    return `Supervisor count was updated to ${supervisorText} for ${waiterText}. Your booking now includes ${countsText}.`;
+  }
+  return `Your booking includes ${countsText}.`;
+}
+
 function blankToNull(value) {
   if (value === undefined) return undefined;
   if (value === '') return null;
@@ -108,6 +130,32 @@ function haversineKm(lat1, lon1, lat2, lon2) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getServiceArea() {
+  const latitude = config.serviceArea?.latitude;
+  const longitude = config.serviceArea?.longitude;
+  if (latitude == null || longitude == null) return null;
+  return {
+    latitude,
+    longitude,
+    radiusKm: config.serviceArea.radiusKm ?? 50,
+  };
+}
+
+function assertVenueInServiceArea(lat, lng) {
+  const area = getServiceArea();
+  if (!area) return;
+  if (lat == null || lng == null || Number.isNaN(Number(lat)) || Number.isNaN(Number(lng))) {
+    throw ApiError.badRequest('Venue location is required', { code: 'VENUE_LOCATION_REQUIRED' });
+  }
+  const distanceKm = roundMoney(haversineKm(area.latitude, area.longitude, Number(lat), Number(lng)));
+  if (distanceKm > area.radiusKm) {
+    throw ApiError.badRequest(`Bookings are only available within ${area.radiusKm} km of Hyderabad.`, {
+      code: 'VENUE_OUT_OF_RANGE',
+      details: { distanceKm, maxKm: area.radiusKm },
+    });
+  }
 }
 
 function normalizeCrewCounts(crew = {}) {
@@ -372,6 +420,132 @@ function assertPendingPayment(booking) {
   }
 }
 
+function eventDateAdvisoryLockKeys(eventDate) {
+  const ymd = dateToIsoDate(eventDate);
+  const [year, month, day] = ymd.split('-').map(Number);
+  return {
+    key1: 0x434352, // CCR — serializes place() per event date
+    key2: year * 10000 + month * 100 + day,
+  };
+}
+
+function reservedDemandByRole(liveBookings) {
+  const reserved = { waiter: 0, supervisor: 0, bouncer: 0 };
+  for (const other of liveBookings) {
+    const required = crewCountsFromRequirements(other.crewRequirements);
+    const filled = { waiter: 0, supervisor: 0, bouncer: 0 };
+    for (const assignment of other.assignments || []) {
+      if (filled[assignment.role] != null) filled[assignment.role] += 1;
+    }
+    for (const role of CREW_ROLES) {
+      reserved[role] += Math.max(0, required[role] - filled[role]);
+    }
+  }
+  return reserved;
+}
+
+/**
+ * A crew member can fill a role on this date if they are approved/active,
+ * match the role, are not on time off, and are not already assigned that day.
+ * Unfilled slots on other live same-day bookings also reserve capacity.
+ */
+async function assertCrewSupplyForEvent(client, booking) {
+  const requirements = (booking.crewRequirements || []).filter((row) => row.countRequired > 0);
+  if (!requirements.length || !booking.eventDate) return;
+
+  const roles = [...new Set(requirements.map((row) => row.role))];
+  const eventDate = booking.eventDate;
+  const { key1, key2 } = eventDateAdvisoryLockKeys(eventDate);
+
+  await client.$queryRaw`SELECT pg_advisory_xact_lock(${key1}, ${key2})`;
+  await client.$queryRaw`
+    SELECT id FROM bookings
+    WHERE event_date = ${eventDate}
+      AND status IN ('confirmed', 'crew_assigned', 'in_progress')
+    FOR UPDATE
+  `;
+
+  const [eligible, dateBlocks, busyAssignments, timeOff, liveBookings] = await Promise.all([
+    client.crewMember.findMany({
+      where: {
+        primaryRole: { in: roles },
+        verificationStatus: 'approved',
+        isActive: true,
+        deletedAt: null,
+      },
+      select: { id: true, primaryRole: true },
+    }),
+    client.crewDateBlock.findMany({
+      where: { blockedDate: eventDate },
+      select: { crewId: true },
+    }),
+    client.eventCrewAssignment.findMany({
+      where: {
+        status: { in: SLOT_STATUSES },
+        booking: { eventDate },
+      },
+      select: { crewId: true },
+    }),
+    client.crewTimeOff.findMany({
+      where: {
+        startDate: { lte: eventDate },
+        endDate: { gte: eventDate },
+      },
+      select: { crewId: true },
+    }),
+    client.booking.findMany({
+      where: {
+        eventDate,
+        status: { in: CURRENT_STATUSES },
+        id: { not: booking.id },
+      },
+      include: {
+        crewRequirements: true,
+        assignments: { where: { status: { in: SLOT_STATUSES } }, select: { role: true } },
+      },
+    }),
+  ]);
+
+  const unavailable = new Set([
+    ...dateBlocks.map((row) => row.crewId),
+    ...busyAssignments.map((row) => row.crewId),
+    ...timeOff.map((row) => row.crewId),
+  ]);
+
+  const poolByRole = { waiter: 0, supervisor: 0, bouncer: 0 };
+  for (const crew of eligible) {
+    if (unavailable.has(crew.id)) continue;
+    poolByRole[crew.primaryRole] += 1;
+  }
+
+  const reservedByRole = reservedDemandByRole(liveBookings);
+  const availableByRole = { waiter: 0, supervisor: 0, bouncer: 0 };
+  for (const role of CREW_ROLES) {
+    availableByRole[role] = Math.max(0, (poolByRole[role] || 0) - (reservedByRole[role] || 0));
+  }
+
+  const requiredByRole = crewCountsFromRequirements(requirements);
+  const shortages = CREW_ROLES.filter((role) => requiredByRole[role] > 0)
+    .map((role) => {
+      const required = requiredByRole[role];
+      const available = availableByRole[role] || 0;
+      const shortage = Math.max(0, required - available);
+      return {
+        role,
+        label: roleLabel(role, shortage || required),
+        required,
+        available,
+        shortage,
+      };
+    })
+    .filter((row) => row.shortage > 0);
+
+  if (!shortages.length) return;
+
+  const message = shortages.map((row) => `${row.shortage} ${row.label} shortage`).join(', ');
+  throw ApiError.conflict(message, { code: 'CREW_SHORTAGE', details: { shortages } });
+}
+
 async function allocateBookingReference() {
   for (let i = 0; i < 8; i += 1) {
     const bookingReference = `PC-${crypto.randomInt(10000, 100000)}`;
@@ -459,7 +633,15 @@ class BookingService {
       throw ApiError.badRequest('Event date cannot be in the past', { code: 'EVENT_DATE_INVALID' });
     }
 
+    assertVenueInServiceArea(body.venueLatitude, body.venueLongitude);
+
     const crewCounts = normalizeCrewCounts(body.crew);
+    const requestedSupervisor = crewCounts.supervisor;
+    const ranges = await supervisorRangeService.list();
+    const minSupervisors = supervisorCountForWaiters(crewCounts.waiter, ranges);
+    crewCounts.supervisor = Math.max(requestedSupervisor, minSupervisors);
+    const supervisorAdjusted = crewCounts.supervisor > requestedSupervisor;
+    const message = crewSummaryMessage(crewCounts, { supervisorAdjusted, minSupervisors });
     const durationHours = Number(body.expectedDurationHours);
 
     const existingById = body.id
@@ -538,7 +720,7 @@ class BookingService {
       where: { id: saved.id },
       include: bookingDetailInclude,
     });
-    return { data: serializeSummary(fresh), created: saved.created };
+    return { data: { ...serializeSummary(fresh), message }, created: saved.created, message };
   }
 
   async getCart(userId) {
@@ -613,9 +795,12 @@ class BookingService {
       throw ApiError.badRequest('Booking is incomplete', { code: 'BOOKING_INCOMPLETE' });
     }
 
+    assertVenueInServiceArea(booking.venueLatitude, booking.venueLongitude);
+
     const shiftOtp = generateOtp(4);
     const confirmedAt = new Date();
     await prisma.$transaction(async (tx) => {
+      await assertCrewSupplyForEvent(tx, booking);
       if (booking.couponId) {
         const coupon = await tx.coupon.findUnique({ where: { id: booking.couponId } });
         await couponService.assertRedeemable(coupon, { userId, bookingId: booking.id, client: tx });

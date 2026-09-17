@@ -111,9 +111,11 @@ function serializeCrewDetail(crew) {
     identityDocuments: doc
       ? {
           aadhaarMasked: aadhaar ? maskTail(aadhaar, 4) : null,
+          aadhaarNumber: aadhaar || null,
           aadhaarFrontUrl: doc.aadhaarFrontUrl,
           aadhaarBackUrl: doc.aadhaarBackUrl,
           panMasked: pan ? maskTail(pan, 4) : null,
+          panNumber: pan || null,
           panCardUrl: doc.panCardUrl,
           verifiedByAdminId: doc.verifiedByAdminId,
           verifiedAt: doc.verifiedAt,
@@ -123,16 +125,11 @@ function serializeCrewDetail(crew) {
       ? {
           accountHolderName: bank.accountHolderName,
           accountNumberMasked: accountNumber ? maskTail(accountNumber, 4) : null,
+          accountNumber: accountNumber || null,
           ifscCode: bank.ifscCode,
           upiId: bank.upiId,
         }
       : null,
-    availability: (crew.weeklyAvailability || []).map((d) => ({
-      dayOfWeek: d.dayOfWeek,
-      isAvailable: d.isAvailable,
-      shiftStart: dateToTimeString(d.shiftStart),
-      shiftEnd: dateToTimeString(d.shiftEnd),
-    })),
     timeOff: (crew.timeOff || []).map((t) => ({
       id: t.id,
       startDate: dateToIsoDate(t.startDate),
@@ -276,7 +273,6 @@ class AdminService {
         skills: true,
         identityDocuments: true,
         bankDetails: true,
-        weeklyAvailability: { orderBy: { dayOfWeek: 'asc' } },
         timeOff: { orderBy: { startDate: 'asc' } },
         profileEditRequests: { where: { status: 'pending' }, select: { id: true } },
         _count: { select: { assignments: true } },

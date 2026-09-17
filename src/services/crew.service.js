@@ -3,18 +3,6 @@ import ApiError from '../utils/apiError.js';
 import { encrypt, decrypt, maskTail } from '../utils/crypto.js';
 import { activityLogService } from './index.js';
 
-// --- small time/date helpers for @db.Time and @db.Date columns ---------------
-
-function timeStringToDate(hhmm) {
-  if (!hhmm) return null;
-  return new Date(`1970-01-01T${hhmm}:00.000Z`);
-}
-
-function dateToTimeString(date) {
-  if (!date) return null;
-  return date.toISOString().slice(11, 16); // HH:mm
-}
-
 function dateToIsoDate(date) {
   if (!date) return null;
   return date.toISOString().slice(0, 10); // YYYY-MM-DD
@@ -81,12 +69,6 @@ function serializeProfile(crew) {
           upiId: bank.upiId,
         }
       : null,
-    availability: (crew.weeklyAvailability || []).map((d) => ({
-      dayOfWeek: d.dayOfWeek,
-      isAvailable: d.isAvailable,
-      shiftStart: dateToTimeString(d.shiftStart),
-      shiftEnd: dateToTimeString(d.shiftEnd),
-    })),
     timeOff: (crew.timeOff || []).map((t) => ({
       id: t.id,
       startDate: dateToIsoDate(t.startDate),
@@ -117,7 +99,6 @@ class CrewService {
         skills: true,
         identityDocuments: true,
         bankDetails: true,
-        weeklyAvailability: { orderBy: { dayOfWeek: 'asc' } },
         timeOff: { orderBy: { startDate: 'asc' } },
       },
     });
@@ -226,40 +207,7 @@ class CrewService {
     return this.getProfile(crewId);
   }
 
-  // --- Availability ----------------------------------------------------------
-
-  async getAvailability(crewId) {
-    await getCrewOrThrow(crewId);
-    const days = await prisma.crewWeeklyAvailability.findMany({
-      where: { crewId },
-      orderBy: { dayOfWeek: 'asc' },
-    });
-    return days.map((d) => ({
-      dayOfWeek: d.dayOfWeek,
-      isAvailable: d.isAvailable,
-      shiftStart: dateToTimeString(d.shiftStart),
-      shiftEnd: dateToTimeString(d.shiftEnd),
-    }));
-  }
-
-  async replaceAvailability(crewId, days) {
-    await getCrewOrThrow(crewId);
-    await prisma.$transaction(async (tx) => {
-      await tx.crewWeeklyAvailability.deleteMany({ where: { crewId } });
-      if (days.length) {
-        await tx.crewWeeklyAvailability.createMany({
-          data: days.map((d) => ({
-            crewId,
-            dayOfWeek: d.dayOfWeek,
-            isAvailable: d.isAvailable ?? true,
-            shiftStart: timeStringToDate(d.shiftStart),
-            shiftEnd: timeStringToDate(d.shiftEnd),
-          })),
-        });
-      }
-    });
-    return this.getAvailability(crewId);
-  }
+  // --- Time off --------------------------------------------------------------
 
   async listTimeOff(crewId) {
     await getCrewOrThrow(crewId);

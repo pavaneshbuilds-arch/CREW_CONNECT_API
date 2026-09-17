@@ -28,16 +28,6 @@ class CrewController {
     return success(res, data, { message: 'Bank details saved' });
   });
 
-  getAvailability = catchAsync(async (req, res) => {
-    const data = await crewService.getAvailability(req.auth.sub);
-    return success(res, data);
-  });
-
-  replaceAvailability = catchAsync(async (req, res) => {
-    const data = await crewService.replaceAvailability(req.auth.sub, req.body.days);
-    return success(res, data, { message: 'Availability updated' });
-  });
-
   listTimeOff = catchAsync(async (req, res) => {
     const data = await crewService.listTimeOff(req.auth.sub);
     return success(res, data);
