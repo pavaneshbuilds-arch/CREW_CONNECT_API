@@ -13,6 +13,7 @@ export { default as supervisorRangeService } from './supervisorRange.service.js'
 export { default as couponService } from './coupon.service.js';
 export { default as deviceService } from './device.service.js';
 export { default as uploadService } from './upload.service.js';
+export { default as placesService } from './places.service.js';
 export { default as authService } from './auth.service.js';
 export { default as userService } from './user.service.js';
 export { default as bookingService } from './booking.service.js';

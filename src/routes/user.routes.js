@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import validate from '../middlewares/validate.js';
 import { authenticate, requireType } from '../middlewares/auth.js';
+import { placesLimiter } from '../middlewares/rateLimiter.js';
 import * as schema from '../validations/user.validation.js';
 import * as bookingSchema from '../validations/booking.validation.js';
 import { userController, bookingController } from '../controllers/index.js';
@@ -25,6 +26,7 @@ class UserRoutes {
 
     this.router.get('/coupons', userController.listCoupons);
     this.router.get('/support', userController.getSupport);
+    this.router.get('/places/search', placesLimiter, validate(schema.searchPlaces), userController.searchPlaces);
 
     this.router.get('/bookings/options', bookingController.getOptions);
     this.router.get('/bookings/crew-suggestion', validate(bookingSchema.crewSuggestion), bookingController.getCrewSuggestion);

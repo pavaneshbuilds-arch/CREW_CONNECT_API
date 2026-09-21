@@ -73,6 +73,8 @@ const config = {
 
   google: {
     clientId: get('GOOGLE_CLIENT_ID', { fallback: undefined }),
+    // Server-side Places API (New) key. Never ship this to the mobile apps.
+    placesApiKey: get('GOOGLE_PLACES_API_KEY', { fallback: undefined }),
   },
 
   // 32-byte key (hex or base64) used for AES-256-GCM encryption of sensitive

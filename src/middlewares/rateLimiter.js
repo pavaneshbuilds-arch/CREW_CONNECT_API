@@ -26,3 +26,11 @@ export const otpLimiter = makeLimiter({
 
 // General auth limiter for verify/login endpoints.
 export const authLimiter = makeLimiter({ windowMs: 60 * 1000, max: 20 });
+
+// Caps Places proxy traffic so a typeahead UI cannot burn Google quota.
+export const placesLimiter = makeLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  code: 'PLACES_RATE_LIMITED',
+  message: 'Too many location searches. Wait a moment and try again.',
+});

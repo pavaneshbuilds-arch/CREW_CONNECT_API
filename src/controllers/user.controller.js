@@ -1,6 +1,6 @@
 import catchAsync from '../utils/catchAsync.js';
 import { success, created } from '../utils/apiResponse.js';
-import { userService } from '../services/index.js';
+import { userService, placesService } from '../services/index.js';
 
 class UserController {
   getMe = catchAsync(async (req, res) => {
@@ -50,6 +50,11 @@ class UserController {
 
   getSupport = catchAsync(async (req, res) => {
     const data = userService.getSupport();
+    return success(res, data);
+  });
+
+  searchPlaces = catchAsync(async (req, res) => {
+    const data = await placesService.search(req.query);
     return success(res, data);
   });
 }

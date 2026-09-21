@@ -57,7 +57,9 @@ Default port is `4000`. All JSON. Charset UTF-8.
 | 403 | `FORBIDDEN_TYPE`, `ACCOUNT_SUSPENDED`, `ACCOUNT_DELETED`, `NOT_APPROVED` |
 | 404 | `ROUTE_NOT_FOUND`, `CREW_NOT_FOUND`, `USER_NOT_FOUND`, `ADDRESS_NOT_FOUND`, `BOOKING_NOT_FOUND` |
 | 409 | `PROFILE_LOCKED`, `ALREADY_APPROVED`, `NOT_APPROVED`, `UNIQUE_CONSTRAINT`, `PHONE_IN_USE`, `BOOKING_NOT_EDITABLE`, `BOOKING_NOT_CANCELLABLE`, `REVIEW_NOT_ALLOWED`, `REVIEW_ALREADY_EXISTS`, `JOB_NOT_AVAILABLE`, `JOB_FULL`, `JOB_ALREADY_ACCEPTED`, `JOB_ALREADY_REJECTED`, `DATE_BLOCKED`, `SHIFT_NOT_STARTABLE`, `SHIFT_NOT_COMPLETABLE`, `BOOKING_CANCELLED`, `CREW_SHORTAGE` |
-| 429 | `OTP_RATE_LIMITED`, `OTP_LOCKED` |
+| 429 | `OTP_RATE_LIMITED`, `OTP_LOCKED`, `PLACES_RATE_LIMITED` |
+| 500 | `PLACES_NOT_CONFIGURED` (server has no `GOOGLE_PLACES_API_KEY`) |
+| 502 | `PLACES_UPSTREAM_ERROR` (Google Places timed out or rejected the request) |
 
 Validation errors include `details`: `[{ "path": "phoneNumber", "message": "…" }]`.
 
@@ -142,7 +144,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 | Create Account | `PATCH /users/me` with `fullName` + optional `email`. Photo: `POST /uploads` (`purpose=profile_photo`) then PATCH `profilePhotoUrl`. **Skip For Now** is client-only. |
 | Create Account — phone (Google) | `POST /auth/otp/request` then `POST /users/me/phone/verify`. OTP users already have a verified phone — do not send it on PATCH. |
 | Enable Location Access | `PATCH /users/me` `{ "locationAccessEnabled": true }` then either map confirm or Add Address |
-| Confirm Location / Add Address | `POST /users/me/addresses` |
+| Confirm Location / Add Address | `GET /users/places/search?q=` then `POST /users/me/addresses` with `latitude` / `longitude` (and `pincode` from `postalCode`) |
 | Change saved address | `GET` / `PATCH` / `DELETE /users/me/addresses` |
 | Account | `GET /users/me` |
 | Account details / Edit Profile | `PATCH /users/me` |
@@ -150,7 +152,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 | Coupons | `GET /users/coupons` |
 | Help & Support | `GET /users/support` |
 | Tell Us About Your Event / Choose Your Crew | `GET /users/bookings/options` then `GET /users/bookings/crew-suggestion` |
-| Confirm Your Booking | `PUT /users/bookings/summary` (creates the cart draft + pricing) |
+| Confirm Your Booking | `GET /users/places/search?q=` to pick a venue, then `PUT /users/bookings/summary` (creates the cart draft + pricing) |
 | Cart | `GET /users/cart`. Edit → same `PUT /users/bookings/summary` with `id`. Apply/remove offer → coupon endpoints |
 | Proceed To Pay / Confirm Booking | `POST /users/bookings/:id/place` (**temporary**, no payment gateway yet) |
 | My Bookings | `GET /users/bookings?tab=current` or `tab=past` |
@@ -530,7 +532,7 @@ Array of saved addresses, default first.
 
 ### `POST /users/me/addresses` — **201**
 
-Confirm Location or Add Address.
+Confirm Location or Add Address. Prefer `GET /users/places/search` first, then send `latitude` / `longitude` and `pincode` from the selected row.
 
 ```json
 {
@@ -598,6 +600,56 @@ Static Help & Support contacts (`SUPPORT_EMAIL`, `SUPPORT_PHONE`, `SUPPORT_WHATS
   }
 }
 ```
+
+### `GET /users/places/search`
+
+Venue / address typeahead. Proxies Google Places Text Search with a Hyderabad `locationBias` (the existing `SERVICE_CENTER_*` / `SERVICE_RADIUS_KM` circle). The Places API key stays on the server — do not put it in the app.
+
+**Auth:** Bearer, `type` must be `"user"`. Rate-limited: **30 / minute**.
+
+Query:
+
+| Param | Required | Notes |
+|---|---|---|
+| `q` | yes | Search string, 2–200 characters |
+| `limit` | no | 1–10, default **8** |
+
+```
+GET /users/places/search?q=hitech%20city
+```
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "placeId": "ChIJ...",
+      "name": "Taj Convention Centre",
+      "address": "Hitech City Road, Madhapur, Hyderabad, Telangana 500081",
+      "latitude": 17.4483,
+      "longitude": 78.3915,
+      "postalCode": "500081",
+      "inServiceArea": true
+    }
+  ]
+}
+```
+
+No matches → **200** with `data: []`. Results without coordinates are dropped.
+
+Copy a selected row into:
+
+- **Add Address** — `POST /users/me/addresses` `latitude`, `longitude`, `pincode` ← `postalCode`
+- **Confirm Booking** — `PUT /users/bookings/summary` `venueName` ← `name`, `venueAddress` ← `address`, `venueLatitude` ← `latitude`, `venueLongitude` ← `longitude`
+
+`inServiceArea` is a preview of the Hyderabad 50 km booking rule. Bookings still reject out-of-range venues with **400 `VENUE_OUT_OF_RANGE`**. Grey out or warn on `inServiceArea: false` before submit.
+
+| HTTP | `error.code` |
+|---|---|
+| 400 | `VALIDATION_ERROR` (`q` too short / missing) |
+| 429 | `PLACES_RATE_LIMITED` |
+| 500 | `PLACES_NOT_CONFIGURED` — server has no `GOOGLE_PLACES_API_KEY` |
+| 502 | `PLACES_UPSTREAM_ERROR` — Google timed out or rejected the request |
 
 ---
 
@@ -695,7 +747,7 @@ Create or update the cart draft. **201** when a new booking is created, **200** 
 
 `expectedDurationHours` is a number from **1 to 24** (one decimal allowed). It is **not** used in the quote. `eventDate` is `YYYY-MM-DD` (not in the past). `eventStartTime` is `HH:mm`. At least one crew count must be greater than 0.
 
-When the API has a service-area center configured, `venueLatitude` and `venueLongitude` are required. The venue must be within **50 km** of Hyderabad. **400 `VENUE_LOCATION_REQUIRED`** if either coordinate is missing. **400 `VENUE_OUT_OF_RANGE`** if Haversine distance is greater than the radius (`details.distanceKm`, `details.maxKm`). The same check runs on `POST /users/bookings/:id/place`.
+When the API has a service-area center configured, `venueLatitude` and `venueLongitude` are required. The venue must be within **50 km** of Hyderabad. **400 `VENUE_LOCATION_REQUIRED`** if either coordinate is missing. **400 `VENUE_OUT_OF_RANGE`** if Haversine distance is greater than the radius (`details.distanceKm`, `details.maxKm`). The same check runs on `POST /users/bookings/:id/place`. Prefer `GET /users/places/search` so the app sends a real place name and coordinates instead of free-typed text.
 
 Supervisor count is raised to the admin waiter-range minimum for the submitted waiter count (`GET /users/bookings/options` → `supervisorRanges`). If the organizer sends a **higher** supervisor count, that value is kept. The saved draft, quote, and `data.crew` use the **server** counts — the app should display those, not the request body.
 
@@ -1316,7 +1368,8 @@ GET /users/me  (or login payload)
     Skip For Now → continue without PATCH
   no defaultAddress → Location Access
     PATCH /users/me { locationAccessEnabled: true }
-    POST /users/me/addresses  (map confirm or manual form)
+    GET /users/places/search?q=  (pick a match)
+    POST /users/me/addresses  (map confirm or manual form; lat/lng from Places)
   else → Home
 
 Account → GET /users/me
@@ -1326,7 +1379,8 @@ Settings → PATCH /users/me { locationAccessEnabled, pushNotificationsEnabled, 
 Coupons → GET /users/coupons
 Help → GET /users/support
 Book event → GET /users/bookings/options + GET /users/bookings/crew-suggestion
-  → PUT /users/bookings/summary
+  → GET /users/places/search?q=  (venue)
+  → PUT /users/bookings/summary  (venueName, venueAddress, venueLatitude, venueLongitude from Places)
 Cart → GET /users/cart  (edit: PUT /users/bookings/summary; coupon: POST/DELETE /users/bookings/:id/coupon)
 Pay / confirm → POST /users/bookings/:id/place   (until payment gateway)
 My Bookings → GET /users/bookings?tab=current|past
@@ -1347,6 +1401,7 @@ Delete Account → DELETE /users/me
 | `POST /auth/otp/request` | 5 / minute |
 | Login / verify / refresh / Google | 20 / minute |
 | `POST /uploads` | 20 / minute |
+| `GET /users/places/search` | 30 / minute |
 
 ---
 
@@ -1366,6 +1421,7 @@ Delete Account → DELETE /users/me
 - [ ] For emulator, point `PUBLIC_BASE_URL` at `http://10.0.2.2:4000` so image URLs load
 - [ ] Do not display full Aadhaar / account number (API will not return them)
 - [ ] Booking cart is a single `pending_payment` draft; `PUT /users/bookings/summary` both creates and edits it
+- [ ] Venue picker: `GET /users/places/search?q=` then copy `name` / `address` / `latitude` / `longitude` into summary. Warn if `inServiceArea` is false
 - [ ] `POST /users/bookings/:id/place` is the stand-in until the payment gateway exists
 - [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.
 - [ ] Crew job `id` is the integer booking id; `orderId` / `bookingReference` is the human code on the header
