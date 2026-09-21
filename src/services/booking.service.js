@@ -458,7 +458,8 @@ async function assertCrewSupplyForEvent(client, booking) {
   const { key1, key2 } = eventDateAdvisoryLockKeys(eventDate);
 
   // Two-arg pg_advisory_xact_lock takes int4,int4 — Prisma binds JS numbers as bigint.
-  await client.$queryRaw`SELECT pg_advisory_xact_lock(${key1}::int, ${key2}::int)`;
+  // Use $executeRaw: the function returns void, which $queryRaw cannot deserialize.
+  await client.$executeRaw`SELECT pg_advisory_xact_lock(${key1}::int, ${key2}::int)`;
   await client.$queryRaw`
     SELECT id FROM bookings
     WHERE event_date = ${eventDate}
