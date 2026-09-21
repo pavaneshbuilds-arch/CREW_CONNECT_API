@@ -457,7 +457,8 @@ async function assertCrewSupplyForEvent(client, booking) {
   const eventDate = booking.eventDate;
   const { key1, key2 } = eventDateAdvisoryLockKeys(eventDate);
 
-  await client.$queryRaw`SELECT pg_advisory_xact_lock(${key1}, ${key2})`;
+  // Two-arg pg_advisory_xact_lock takes int4,int4 — Prisma binds JS numbers as bigint.
+  await client.$queryRaw`SELECT pg_advisory_xact_lock(${key1}::int, ${key2}::int)`;
   await client.$queryRaw`
     SELECT id FROM bookings
     WHERE event_date = ${eventDate}
