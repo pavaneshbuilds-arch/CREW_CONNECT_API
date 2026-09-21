@@ -73,7 +73,7 @@ const config = {
 
   google: {
     clientId: get('GOOGLE_CLIENT_ID', { fallback: undefined }),
-    // Server-side Places API (New) key. Never ship this to the mobile apps.
+    // Server-side Places Text Search key. Never ship this to the mobile apps.
     placesApiKey: get('GOOGLE_PLACES_API_KEY', { fallback: undefined }),
   },
 

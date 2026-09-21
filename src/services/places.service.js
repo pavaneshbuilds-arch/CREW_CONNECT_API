@@ -2,15 +2,7 @@ import config from '../config/env.js';
 import ApiError from '../utils/apiError.js';
 import logger from '../utils/logger.js';
 
-const TEXT_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
-const FIELD_MASK = [
-  'places.id',
-  'places.displayName',
-  'places.formattedAddress',
-  'places.location',
-  'places.addressComponents',
-  'places.types',
-].join(',');
+const TEXT_SEARCH_URL = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
 const UPSTREAM_TIMEOUT_MS = 8000;
 const MAX_BIAS_RADIUS_M = 50_000;
 
@@ -39,17 +31,9 @@ function roundCoord(value) {
   return Math.round(Number(value) * 1e6) / 1e6;
 }
 
-function postalCodeFrom(components) {
-  if (!Array.isArray(components)) return null;
-  const match = components.find((c) => Array.isArray(c.types) && c.types.includes('postal_code'));
-  if (!match) return null;
-  const code = match.longText || match.longName || match.shortText || match.shortName;
-  return code ? String(code) : null;
-}
-
-function placeIdFrom(place) {
-  const raw = place.id || place.name || '';
-  return raw.startsWith('places/') ? raw.slice('places/'.length) : raw;
+function postalCodeFromAddress(address) {
+  const match = String(address || '').match(/\b(\d{6})\b/);
+  return match ? match[1] : null;
 }
 
 function isInServiceArea(lat, lng, area) {
@@ -60,28 +44,38 @@ function isInServiceArea(lat, lng, area) {
   return haversineKm(area.latitude, area.longitude, Number(lat), Number(lng)) <= area.radiusKm;
 }
 
-function normalizePlace(place, area) {
-  const lat = place.location?.latitude;
-  const lng = place.location?.longitude;
+function normalizePlace(result, area) {
+  const lat = result.geometry?.location?.lat;
+  const lng = result.geometry?.location?.lng;
   if (lat == null || lng == null) return null;
 
-  const name = place.displayName?.text || place.formattedAddress || '';
-  const address = place.formattedAddress || name;
+  const name = result.name || result.formatted_address || '';
+  const address = result.formatted_address || name;
   if (!name && !address) return null;
 
   return {
-    placeId: placeIdFrom(place),
+    placeId: result.place_id || '',
     name,
     address,
     latitude: roundCoord(lat),
     longitude: roundCoord(lng),
-    postalCode: postalCodeFrom(place.addressComponents),
+    postalCode: postalCodeFromAddress(address),
     inServiceArea: isInServiceArea(lat, lng, area),
   };
 }
 
 function upstreamError() {
   return new ApiError(502, 'Places search failed', { code: 'PLACES_UPSTREAM_ERROR' });
+}
+
+async function fetchWithTimeout(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    return await fetch(url, { method: 'GET', signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 class PlacesService {
@@ -92,46 +86,21 @@ class PlacesService {
     }
 
     const area = getServiceArea();
-    const body = {
-      textQuery: q,
-      languageCode: 'en',
-      regionCode: 'IN',
-      maxResultCount: limit,
-    };
-
+    const url = new URL(TEXT_SEARCH_URL);
+    url.searchParams.set('query', q);
+    url.searchParams.set('language', 'en');
+    url.searchParams.set('region', 'in');
+    url.searchParams.set('key', apiKey);
     if (area) {
-      body.locationBias = {
-        circle: {
-          center: { latitude: area.latitude, longitude: area.longitude },
-          radius: Math.min(area.radiusKm * 1000, MAX_BIAS_RADIUS_M),
-        },
-      };
+      url.searchParams.set('location', `${area.latitude},${area.longitude}`);
+      url.searchParams.set('radius', String(Math.min(area.radiusKm * 1000, MAX_BIAS_RADIUS_M)));
     }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
     let response;
     try {
-      response = await fetch(TEXT_SEARCH_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': FIELD_MASK,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      response = await fetchWithTimeout(url);
     } catch (err) {
-      logger.warn('Places upstream request failed', { name: err?.name, message: err?.message });
-      throw upstreamError();
-    } finally {
-      clearTimeout(timer);
-    }
-
-    if (!response.ok) {
-      logger.warn('Places upstream rejected request', { status: response.status });
+      logger.warn('Places Text Search request failed', { name: err?.name, message: err?.message });
       throw upstreamError();
     }
 
@@ -139,12 +108,26 @@ class PlacesService {
     try {
       payload = await response.json();
     } catch (err) {
-      logger.warn('Places upstream returned invalid JSON', { name: err?.name });
+      logger.warn('Places Text Search returned invalid JSON', { name: err?.name });
       throw upstreamError();
     }
 
-    const places = Array.isArray(payload.places) ? payload.places : [];
-    return places.map((place) => normalizePlace(place, area)).filter(Boolean);
+    if (!response.ok) {
+      logger.warn('Places Text Search HTTP error', { status: response.status, googleStatus: payload?.status });
+      throw upstreamError();
+    }
+
+    const status = payload?.status;
+    if (status === 'ZERO_RESULTS' || status === 'OK') {
+      const results = Array.isArray(payload?.results) ? payload.results : [];
+      return results.map((result) => normalizePlace(result, area)).filter(Boolean).slice(0, limit);
+    }
+
+    logger.warn('Places Text Search rejected request', {
+      googleStatus: status,
+      googleMessage: payload?.error_message,
+    });
+    throw upstreamError();
   }
 }
 
