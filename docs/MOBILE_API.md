@@ -603,7 +603,7 @@ Static Help & Support contacts (`SUPPORT_EMAIL`, `SUPPORT_PHONE`, `SUPPORT_WHATS
 
 ### `GET /users/places/search`
 
-Venue / address typeahead. Proxies Google Places Text Search with a Hyderabad location bias (`SERVICE_CENTER_*` / `SERVICE_RADIUS_KM`). The Places API key stays on the server — do not put it in the app.
+Venue / address typeahead. Proxies Google Places with a Hyderabad location bias (`SERVICE_CENTER_*` / `SERVICE_RADIUS_KM`). Name queries match place titles; an address or pincode is resolved to a point, then nearby venues at that location are returned (so searching a street or PIN can still surface the hall). The Places API key stays on the server — do not put it in the app.
 
 **Auth:** Bearer, `type` must be `"user"`. Rate-limited: **30 / minute**.
 
