@@ -47,6 +47,15 @@ class BookingController {
     return success(res, data);
   });
 
+  issueShiftOtp = catchAsync(async (req, res) => {
+    const data = await bookingService.issueShiftOtp(
+      req.auth.sub,
+      Number(req.params.id),
+      Number(req.params.assignmentId)
+    );
+    return success(res, data, { message: 'Shift code sent' });
+  });
+
   cancel = catchAsync(async (req, res) => {
     const data = await bookingService.cancel(req.auth.sub, Number(req.params.id), req.body?.reason);
     return success(res, data, { message: 'Booking cancelled' });

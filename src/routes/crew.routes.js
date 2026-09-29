@@ -42,7 +42,11 @@ class CrewRoutes {
     this.router.post('/bookings/:id/accept', validate(bookingSchema.bookingParam), crewBookingController.accept);
     this.router.post('/bookings/:id/reject', validate(bookingSchema.bookingParam), crewBookingController.reject);
     this.router.post('/bookings/:id/start', validate(bookingSchema.verifyStart), crewBookingController.verifyStart);
-    this.router.post('/bookings/:id/otp/resend', validate(bookingSchema.bookingParam), crewBookingController.resendShiftOtp);
+    this.router.post(
+      '/bookings/:id/team/:assignmentId/otp',
+      validate(bookingSchema.issueTeamOtp),
+      crewBookingController.issueTeamOtp
+    );
     this.router.post('/bookings/:id/complete', validate(bookingSchema.bookingParam), crewBookingController.complete);
     this.router.get('/bookings/:id', validate(bookingSchema.bookingParamWithCoords), crewBookingController.getById);
   }

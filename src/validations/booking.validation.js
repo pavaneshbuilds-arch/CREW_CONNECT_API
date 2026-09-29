@@ -68,6 +68,13 @@ export const applyCoupon = {
 
 export const bookingParam = idParam;
 
+export const issueShiftOtp = {
+  params: Joi.object({
+    id: Joi.number().integer().positive().required(),
+    assignmentId: Joi.number().integer().positive().required(),
+  }),
+};
+
 export const listBookings = {
   query: Joi.object({
     ...pagination,

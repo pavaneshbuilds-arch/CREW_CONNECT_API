@@ -52,11 +52,11 @@ Default port is `4000`. All JSON. Charset UTF-8.
 
 | HTTP | Typical `error.code` |
 |---|---|
-| 400 | `VALIDATION_ERROR`, `OTP_INVALID`, `OTP_EXPIRED`, `OTP_NOT_FOUND`, `PROFILE_INCOMPLETE`, `INVALID_FILE_TYPE`, `FILE_TOO_LARGE`, `FILE_REQUIRED`, `EVENT_DATE_INVALID`, `CREW_REQUIRED`, `COUPON_INVALID`, `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED`, `COUPON_USER_LIMIT`, `BOOKING_INCOMPLETE`, `SHIFT_OTP_INVALID`, `VENUE_LOCATION_REQUIRED`, `VENUE_OUT_OF_RANGE` |
+| 400 | `VALIDATION_ERROR`, `OTP_INVALID`, `OTP_EXPIRED`, `OTP_NOT_FOUND`, `PROFILE_INCOMPLETE`, `INVALID_FILE_TYPE`, `FILE_TOO_LARGE`, `FILE_REQUIRED`, `EVENT_DATE_INVALID`, `CREW_REQUIRED`, `COUPON_INVALID`, `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED`, `COUPON_USER_LIMIT`, `BOOKING_INCOMPLETE`, `SHIFT_OTP_INVALID`, `SHIFT_OTP_NOT_ISSUED`, `VENUE_LOCATION_REQUIRED`, `VENUE_OUT_OF_RANGE` |
 | 401 | `NO_APP_TOKEN` (missing X-App-Token), `INVALID_APP_TOKEN` (bad/unknown token), `APP_TOKEN_EXPIRED` (re-register device), `APP_TOKEN_REVOKED` (device banned), `NO_TOKEN`, `INVALID_TOKEN` |
-| 403 | `FORBIDDEN_TYPE`, `ACCOUNT_SUSPENDED`, `ACCOUNT_DELETED`, `NOT_APPROVED` |
-| 404 | `ROUTE_NOT_FOUND`, `CREW_NOT_FOUND`, `USER_NOT_FOUND`, `ADDRESS_NOT_FOUND`, `BOOKING_NOT_FOUND` |
-| 409 | `PROFILE_LOCKED`, `ALREADY_APPROVED`, `NOT_APPROVED`, `UNIQUE_CONSTRAINT`, `PHONE_IN_USE`, `BOOKING_NOT_EDITABLE`, `BOOKING_NOT_CANCELLABLE`, `REVIEW_NOT_ALLOWED`, `REVIEW_ALREADY_EXISTS`, `JOB_NOT_AVAILABLE`, `JOB_FULL`, `JOB_ALREADY_ACCEPTED`, `JOB_ALREADY_REJECTED`, `DATE_BLOCKED`, `SHIFT_NOT_STARTABLE`, `SHIFT_NOT_COMPLETABLE`, `BOOKING_CANCELLED`, `CREW_SHORTAGE` |
+| 403 | `FORBIDDEN_TYPE`, `ACCOUNT_SUSPENDED`, `ACCOUNT_DELETED`, `NOT_APPROVED`, `SHIFT_OTP_NOT_ALLOWED` |
+| 404 | `ROUTE_NOT_FOUND`, `CREW_NOT_FOUND`, `USER_NOT_FOUND`, `ADDRESS_NOT_FOUND`, `BOOKING_NOT_FOUND`, `ASSIGNMENT_NOT_FOUND` |
+| 409 | `PROFILE_LOCKED`, `ALREADY_APPROVED`, `NOT_APPROVED`, `UNIQUE_CONSTRAINT`, `PHONE_IN_USE`, `BOOKING_NOT_EDITABLE`, `BOOKING_NOT_CANCELLABLE`, `REVIEW_NOT_ALLOWED`, `REVIEW_ALREADY_EXISTS`, `JOB_NOT_AVAILABLE`, `JOB_FULL`, `JOB_ALREADY_ACCEPTED`, `JOB_ALREADY_REJECTED`, `DATE_BLOCKED`, `SHIFT_NOT_STARTABLE`, `SHIFT_NOT_COMPLETABLE`, `SHIFT_OTP_NOT_ISSUABLE`, `SHIFT_ALREADY_STARTED`, `SHIFT_NOT_VALIDATING`, `BOOKING_CANCELLED`, `CREW_SHORTAGE` |
 | 429 | `OTP_RATE_LIMITED`, `OTP_LOCKED`, `PLACES_RATE_LIMITED` |
 | 500 | `PLACES_NOT_CONFIGURED` (server has no `GOOGLE_PLACES_API_KEY`) |
 | 502 | `PLACES_UPSTREAM_ERROR` (Google Places timed out or rejected the request) |
@@ -108,8 +108,9 @@ Use this to wire screens that already exist in design.
 | Detail Order | `GET /crew/bookings/:id` |
 | Accept Job | `POST /crew/bookings/:id/accept` |
 | Reject | `POST /crew/bookings/:id/reject` |
-| Order Accepted / Start Shift | `GET /crew/bookings/:id` then OTP screen |
-| Shift OTP | `POST /crew/bookings/:id/start` with `{ "code" }`. Resend → `POST /crew/bookings/:id/otp/resend` |
+| Order Accepted / Start Shift | `GET /crew/bookings/:id`. Open the OTP screen only when `actions.canStartShift` is true |
+| Shift OTP | `POST /crew/bookings/:id/start` with `{ "code" }`. The organizer (or the supervisor, for a waiter) issues that code. There is no crew resend |
+| Supervisor — validate waiters | After this supervisor’s shift is in progress, `team.canValidate` is true. Issue a code with `POST /crew/bookings/:id/team/:assignmentId/otp` |
 | Shift In Progress | `GET /crew/bookings/:id` (poll). Complete → `POST /crew/bookings/:id/complete` |
 | Shift Completed | `GET /crew/bookings/:id` (`status: "completed"`) |
 | Mark dates off / vacation | `GET/POST/DELETE /crew/me/time-off` |
@@ -156,7 +157,8 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 | Cart | `GET /users/cart`. Edit → same `PUT /users/bookings/summary` with `id`. Apply/remove offer → coupon endpoints |
 | Proceed To Pay / Confirm Booking | `POST /users/bookings/:id/place` (**temporary**, no payment gateway yet) |
 | My Bookings | `GET /users/bookings?tab=current` or `tab=past` |
-| Order Details | `GET /users/bookings/:id` |
+| Order Details | `GET /users/bookings/:id`. Crew table is `shiftValidation` |
+| Order Details — OTP for a crew row | `POST /users/bookings/:id/assignments/:assignmentId/otp` |
 | Cancel Booking | `POST /users/bookings/:id/cancel` |
 | Rate & Review | `POST /users/bookings/:id/review` |
 | Logout | `POST /auth/logout` |
@@ -825,7 +827,9 @@ Removes the offer and recalculates totals.
 
 ### `POST /users/bookings/:id/place`
 
-**Temporary stand-in for the payment gateway.** Sets status to `confirmed`, stores `confirmedAt`, generates a 4-digit `shiftOtp`. No `Payment` row is written. **409 `BOOKING_NOT_EDITABLE`** if not `pending_payment`. Re-checks the Hyderabad 50 km venue rule (**400 `VENUE_LOCATION_REQUIRED`** / **400 `VENUE_OUT_OF_RANGE`**).
+**Temporary stand-in for the payment gateway.** Sets status to `confirmed` and stores `confirmedAt`. No `Payment` row is written, and no booking-wide shift code is created. **409 `BOOKING_NOT_EDITABLE`** if not `pending_payment`. Re-checks the Hyderabad 50 km venue rule (**400 `VENUE_LOCATION_REQUIRED`** / **400 `VENUE_OUT_OF_RANGE`**).
+
+When the booking’s supervisor count is greater than 0, place also stores one waiter quota per supervisor. Waiters are split evenly and the remainder goes on the **last** slots (50 waiters and 4 supervisors → 12, 12, 13, 13). Nobody is attached to a supervisor until they accept the job. Below the admin staffing threshold the supervisor count is 0, so no quotas are stored.
 
 Before confirming, the API counts **approved, active** crew for each required role who are free on the event date (not already assigned to another event, not on time off). Unfilled slots on other **confirmed / crew_assigned / in_progress** bookings for that date also reserve capacity, even if nobody has accepted yet. If any role is short, it returns **409 `CREW_SHORTAGE`** and does not place the order.
 
@@ -863,13 +867,56 @@ Each item includes `crew` counts, `primaryRole` (highest crew count), `staffCoun
 
 Order Details. Same summary fields (`expectedDurationHours`, snapshotted `rates`, `lineItems` as `count × rate`) plus:
 
-- `shiftOtp` — 4 digits while status is `confirmed`, `crew_assigned`, or `in_progress`; otherwise `null`
+- `shiftValidation` — the crew table this organizer validates. See below.
 - `timeline` — `{ key, label, at, done }` for order placed, confirmed, crew assigned, completed (and cancelled if applicable)
 - `cancellation` — `{ allowed, within24Hours, feePct, refundPct, feeAmount, refundAmount, hoursUntilEvent }`
 - `assignedCrew` — `{ id, fullName, profilePhotoUrl, role, status }[]`
 - `review` — submitted review or `null`
 
 **404 `BOOKING_NOT_FOUND`** if it is not this user’s booking.
+
+`shiftValidation.mode` is frozen from the supervisor count stored on the booking:
+
+| `mode` | Who the organizer validates |
+|---|---|
+| `supervisors` | Accepted supervisors only. Those supervisors later validate their own waiters. |
+| `waiters` | Accepted waiters directly. Used when the booking has no supervisors. |
+
+Bouncers are not in this table. Rows appear as people accept. Empty quota slots are not shown.
+
+Each row: `assignmentId`, `crewId`, `fullName`, `profilePhotoUrl`, `role`, `status`, `shiftStartedAt`, `otp`, `canIssueOtp`.
+
+- `otp` is the current 4-digit code while that person’s shift has not started, or `null` if none has been issued yet or the shift has already started.
+- `canIssueOtp` is true only while the booking is `confirmed`, `crew_assigned`, or `in_progress` and that assignment is still `assigned` or `confirmed`.
+
+```json
+{
+  "shiftValidation": {
+    "mode": "supervisors",
+    "rows": [
+      {
+        "assignmentId": 41,
+        "crewId": 8,
+        "fullName": "Anita Rao",
+        "profilePhotoUrl": "https://…",
+        "role": "supervisor",
+        "status": "confirmed",
+        "shiftStartedAt": null,
+        "otp": "1846",
+        "canIssueOtp": true
+      }
+    ]
+  }
+}
+```
+
+### `POST /users/bookings/:id/assignments/:assignmentId/otp`
+
+OTP button on a `shiftValidation` row. No body. Generates a new 4-digit code for that assignment (replaces an unused code), SMS-stubs it to **that crew member’s phone** (dev: logged to the server console), and returns the updated row including `otp` so the organizer can read it out.
+
+Only the role for `shiftValidation.mode` can be issued: supervisors when `mode` is `supervisors`, waiters when `mode` is `waiters`.
+
+**409 `SHIFT_OTP_NOT_ISSUABLE`** if the booking is not `confirmed`, `crew_assigned`, or `in_progress`. **404 `ASSIGNMENT_NOT_FOUND`**. **403 `SHIFT_OTP_NOT_ALLOWED`** if this row is not one the organizer validates. **409 `SHIFT_ALREADY_STARTED`** if that shift has already started.
 
 ### `POST /users/bookings/:id/cancel`
 
@@ -1097,7 +1144,9 @@ After an organizer confirms a booking (`POST /users/bookings/:id/place`), it is 
 
 Crew-facing `status` values: `new_request` → `accepted` → `in_progress` → `completed` (or `cancelled`).
 
-The 4-digit **shift OTP** is generated when the organizer places the booking and is shown on **`GET /users/bookings/:id`** (`shiftOtp`). The crew member enters that code at the venue to start the shift. It is never returned on crew APIs.
+Shift start is per person. The organizer issues a code for each supervisor (or, when the booking has no supervisors, for each waiter) from Order Details. A supervisor whose own shift is already in progress then issues a code for each waiter assigned to them. The crew member types that code on Start Shift. The code is returned only to the person who issued it. It is never returned on the crew member’s own payload.
+
+On accept, waiters are attached to supervisors using the quotas stored at place time. If waiters accept before any supervisor, they stay unassigned until a supervisor accepts and claims the next open quota. If a supervisor accepts first, later waiters are attached to the earliest supervisor slot that still has room. A waiter’s `team` is not their concern; a supervisor’s `team.rows` lists only the waiters assigned to them.
 
 ### `GET /crew/home`
 
@@ -1203,6 +1252,7 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
       "total": 800
     },
     "assignedCrew": [],
+    "team": null,
     "shift": {
       "startedAt": null,
       "completedAt": null,
@@ -1210,7 +1260,8 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
       "elapsedSeconds": 0,
       "remainingSeconds": 0,
       "progressPercent": 0,
-      "expectedDurationSeconds": 21600
+      "expectedDurationSeconds": 21600,
+      "otpIssued": false
     },
     "payout": null,
     "performance": null,
@@ -1219,15 +1270,25 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
       "canReject": true,
       "canStartShift": false,
       "canVerifyStart": false,
-      "canComplete": false,
-      "canResendOtp": false
+      "canComplete": false
     },
     "serverNow": "2026-09-08T15:30:00.000Z"
   }
 }
 ```
 
-Drive the footer from `actions`. After accept, `canStartShift` is true — open the OTP screen (no extra API). After verify, poll this endpoint for the timer (`elapsedSeconds` / `remainingSeconds` / `progressPercent`); prefer a client timer from `shift.startedAt` + `expectedDurationSeconds`, using `serverNow` to sync.
+Drive the footer from `actions`. `shift.otpIssued` becomes true once a code has been issued for this crew member (it stays true after the shift starts). `canStartShift` / `canVerifyStart` are true only while `status` is `accepted`, the booking is not cancelled, and a code is waiting. Do not open the OTP screen before that. The code itself is not in this payload.
+
+`team` is `null` unless this crew member is a supervisor on the booking. For a supervisor:
+
+| Field | Meaning |
+|---|---|
+| `waiterQuota` | How many waiters this supervisor’s slot holds |
+| `assignedCount` | Waiters already attached to them |
+| `canValidate` | True only after **this supervisor’s** shift is `in_progress` |
+| `rows` | Same shape as the organizer’s `shiftValidation.rows`, but only their waiters. `otp` and `canIssueOtp` are set only when `canValidate` is true and that waiter has not started |
+
+After verify, poll this endpoint for the timer (`elapsedSeconds` / `remainingSeconds` / `progressPercent`); prefer a client timer from `shift.startedAt` + `expectedDurationSeconds`, using `serverNow` to sync.
 
 On **completed**, `payout` and `performance` are filled (rating comes from the organizer’s review when present).
 
@@ -1236,6 +1297,8 @@ On **completed**, `payout` and `performance` are filled (rating comes from the o
 ### `POST /crew/bookings/:id/accept`
 
 No body. Creates a `self_assigned` assignment, blocks that event date, and fills the role slot. When every role is filled the booking becomes `crew_assigned`.
+
+If the booking has supervisors, accept also fills waiter quotas: a supervisor claims the next open slot and pulls already-accepted unassigned waiters up to that quota; a waiter is attached to the earliest claimed slot that still has room, or left unassigned if none does.
 
 **409** `JOB_FULL` / `JOB_NOT_AVAILABLE` / `JOB_ALREADY_ACCEPTED` / `JOB_ALREADY_REJECTED` / `DATE_BLOCKED` / `BOOKING_CANCELLED`.
 
@@ -1257,11 +1320,15 @@ Start Shift — verify the 4-digit venue code.
 { "code": "1846" }
 ```
 
-**400 `SHIFT_OTP_INVALID`**. **409 `SHIFT_NOT_STARTABLE`** if the job is not accepted. Response is the detail payload (`status: "in_progress"`).
+**400 `SHIFT_OTP_NOT_ISSUED`** if nobody has issued a code for this assignment yet. **400 `SHIFT_OTP_INVALID`** if the code does not match. **409 `SHIFT_NOT_STARTABLE`** if the job is not accepted. Response is the detail payload (`status: "in_progress"`). The first start on the booking also sets the booking status to `in_progress`.
 
-### `POST /crew/bookings/:id/otp/resend`
+### `POST /crew/bookings/:id/team/:assignmentId/otp`
 
-Regenerates the booking OTP and SMS-stubs it to the **organizer** (dev: logged to the server console). The crew app does not receive the code. **200:** `{ "sent": true }`.
+Supervisor validates one assigned waiter. No body. Allowed only when this caller is a supervisor on the booking and their own shift is `in_progress`. `:assignmentId` must be a waiter whose `reportsTo` assignment is this supervisor.
+
+Generates a new 4-digit code (replaces an unused one), SMS-stubs it to that waiter’s phone (dev: logged to the server console), and returns the waiter row including `otp`.
+
+**403 `SHIFT_OTP_NOT_ALLOWED`** if the caller is not a supervisor on this booking. **409 `SHIFT_NOT_VALIDATING`** if the supervisor’s shift has not started. **404 `ASSIGNMENT_NOT_FOUND`** if that waiter is not on this supervisor’s team. **409 `SHIFT_ALREADY_STARTED`** if the waiter’s shift has already started. **409 `BOOKING_CANCELLED`**.
 
 ### `POST /crew/bookings/:id/complete`
 
@@ -1337,7 +1404,9 @@ GET /crew/me
     Detail Order → GET /crew/bookings/:id
     Accept / Reject → POST /crew/bookings/:id/accept | reject
     Start Shift OTP → POST /crew/bookings/:id/start { code }
-    Resend code → POST /crew/bookings/:id/otp/resend
+      only when actions.canStartShift (a code was issued for this person)
+    Supervisor validates waiters → POST /crew/bookings/:id/team/:assignmentId/otp
+      only when team.canValidate
     Shift In Progress / Complete → GET /crew/bookings/:id ; POST /crew/bookings/:id/complete
     Time off → GET/POST/DELETE /crew/me/time-off
     Account → GET /crew/me
@@ -1385,6 +1454,9 @@ Cart → GET /users/cart  (edit: PUT /users/bookings/summary; coupon: POST/DELET
 Pay / confirm → POST /users/bookings/:id/place   (until payment gateway)
 My Bookings → GET /users/bookings?tab=current|past
 Order Details → GET /users/bookings/:id
+  shiftValidation.mode supervisors → OTP each supervisor row
+  shiftValidation.mode waiters → OTP each waiter row
+  OTP button → POST /users/bookings/:id/assignments/:assignmentId/otp
 Cancel → POST /users/bookings/:id/cancel
 Review → POST /users/bookings/:id/review
 Logout → POST /auth/logout
@@ -1425,7 +1497,10 @@ Delete Account → DELETE /users/me
 - [ ] `POST /users/bookings/:id/place` is the stand-in until the payment gateway exists
 - [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.
 - [ ] Crew job `id` is the integer booking id; `orderId` / `bookingReference` is the human code on the header
-- [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. Shift OTP is the organizer’s 4-digit `shiftOtp`, not the login OTP
+- [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. The shift code is per person, not the login OTP and not a booking-wide `shiftOtp`
+- [ ] Organizer Order Details: render `shiftValidation.rows` only. Supervisors when `mode` is `supervisors`, waiters when `mode` is `waiters`. OTP button calls `POST /users/bookings/:id/assignments/:assignmentId/otp` and shows the returned `otp`
+- [ ] Crew Start Shift: open the code screen only when `actions.canStartShift` is true. There is no resend from the crew app
+- [ ] Supervisor Order Details: waiter table is `team`. Issue codes with `POST /crew/bookings/:id/team/:assignmentId/otp` only when `team.canValidate` is true
 - [ ] Drive Accept / Reject / Start / Complete buttons from `actions` on `GET /crew/bookings/:id`
 
 Questions: backend owner (Pavanesh), `CREW_CONNECT_API`.

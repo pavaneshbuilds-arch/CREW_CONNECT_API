@@ -37,6 +37,13 @@ export const bookingParamWithCoords = {
   }).and('latitude', 'longitude'),
 };
 
+export const issueTeamOtp = {
+  params: Joi.object({
+    id: Joi.number().integer().positive().required(),
+    assignmentId: Joi.number().integer().positive().required(),
+  }),
+};
+
 export const verifyStart = {
   ...bookingParam,
   body: Joi.object({

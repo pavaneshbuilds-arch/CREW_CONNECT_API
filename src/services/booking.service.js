@@ -11,11 +11,12 @@ import {
   ROLE_LABELS,
   getGstPercent,
   suggestCrew,
+  splitWaiterQuotas,
   supervisorCountForWaiters,
 } from '../config/pricing.js';
 import ApiError from '../utils/apiError.js';
 import { generateOtp } from '../utils/otp.js';
-import { activityLogService, couponService, rateCardService, supervisorRangeService } from './index.js';
+import { activityLogService, couponService, rateCardService, smsService, supervisorRangeService } from './index.js';
 
 const CURRENT_STATUSES = ['confirmed', 'crew_assigned', 'in_progress'];
 const PAST_STATUSES = ['completed', 'cancelled'];
@@ -368,15 +369,52 @@ function serializeListItem(booking, { latitude, longitude } = {}) {
   };
 }
 
+const SHIFT_STARTABLE_STATUSES = ['assigned', 'confirmed'];
+
+function validationRole(booking) {
+  const counts = crewCountsFromRequirements(booking.crewRequirements);
+  return counts.supervisor > 0 ? 'supervisor' : 'waiter';
+}
+
+function serializeValidationRow(assignment) {
+  const notStarted = SHIFT_STARTABLE_STATUSES.includes(assignment.status);
+  return {
+    assignmentId: assignment.id,
+    crewId: assignment.crew?.id ?? assignment.crewId,
+    fullName: assignment.crew?.fullName ?? null,
+    profilePhotoUrl: assignment.crew?.profilePhotoUrl ?? null,
+    role: assignment.role,
+    status: assignment.status,
+    shiftStartedAt: assignment.shiftStartedAt ?? null,
+    otp: notStarted ? assignment.shiftOtp ?? null : null,
+    canIssueOtp: notStarted,
+  };
+}
+
+function buildShiftValidation(booking) {
+  const role = validationRole(booking);
+  const bookingOpen = OTP_VISIBLE_STATUSES.includes(booking.status);
+  const rows = (booking.assignments || [])
+    .filter((row) => row.role === role)
+    .map((row) => {
+      const serialized = serializeValidationRow(row);
+      if (!bookingOpen) return { ...serialized, otp: null, canIssueOtp: false };
+      return serialized;
+    });
+  return {
+    mode: role === 'supervisor' ? 'supervisors' : 'waiters',
+    rows,
+  };
+}
+
 function serializeDetails(booking) {
   const review = (booking.reviews || [])[0];
-  const showOtp = OTP_VISIBLE_STATUSES.includes(booking.status);
   return {
     ...serializeSummary(booking),
     confirmedAt: booking.confirmedAt,
     cancelledAt: booking.cancelledAt,
     cancellationReason: booking.cancellationReason,
-    shiftOtp: showOtp ? booking.shiftOtp : null,
+    shiftValidation: buildShiftValidation(booking),
     timeline: buildTimeline(booking),
     cancellation: cancellationPreview(booking),
     assignedCrew: (booking.assignments || []).map((a) => ({
@@ -574,6 +612,19 @@ function quoteFromBooking(booking, coupon) {
   const rates = ratesFromRequirements(booking.crewRequirements);
   const lineItems = buildLineItems({ crewCounts, rates });
   return { lineItems, ...computeTotals(lineItems, coupon) };
+}
+
+async function persistSupervisorSlots(tx, booking) {
+  const counts = crewCountsFromRequirements(booking.crewRequirements);
+  const quotas = splitWaiterQuotas(counts.waiter, counts.supervisor);
+  if (!quotas.length) return;
+  await tx.bookingSupervisorSlot.createMany({
+    data: quotas.map((waiterQuota, index) => ({
+      bookingId: booking.id,
+      sortOrder: index,
+      waiterQuota,
+    })),
+  });
 }
 
 async function persistRequirements(tx, bookingId, crewCounts, rates) {
@@ -799,7 +850,6 @@ class BookingService {
 
     assertVenueInServiceArea(booking.venueLatitude, booking.venueLongitude);
 
-    const shiftOtp = generateOtp(4);
     const confirmedAt = new Date();
     await prisma.$transaction(async (tx) => {
       await assertCrewSupplyForEvent(tx, booking);
@@ -817,9 +867,9 @@ class BookingService {
         data: {
           status: 'confirmed',
           confirmedAt,
-          shiftOtp,
         },
       });
+      await persistSupervisorSlots(tx, booking);
     });
 
     await activityLogService.record({
@@ -873,6 +923,46 @@ class BookingService {
     await getUserOrThrow(userId);
     const booking = await loadOwnedBooking(userId, bookingId);
     return serializeDetails(booking);
+  }
+
+  async issueShiftOtp(userId, bookingId, assignmentId) {
+    await getUserOrThrow(userId);
+    const booking = await loadOwnedBooking(userId, bookingId);
+    if (!OTP_VISIBLE_STATUSES.includes(booking.status)) {
+      throw ApiError.conflict('Shift codes can only be issued for an active booking', {
+        code: 'SHIFT_OTP_NOT_ISSUABLE',
+      });
+    }
+
+    const assignment = (booking.assignments || []).find((row) => row.id === assignmentId);
+    if (!assignment) {
+      throw ApiError.notFound('Crew assignment not found', { code: 'ASSIGNMENT_NOT_FOUND' });
+    }
+    if (assignment.role !== validationRole(booking)) {
+      throw ApiError.forbidden('This crew member is not validated from this order', {
+        code: 'SHIFT_OTP_NOT_ALLOWED',
+      });
+    }
+    if (!SHIFT_STARTABLE_STATUSES.includes(assignment.status)) {
+      throw ApiError.conflict('This shift has already started', { code: 'SHIFT_ALREADY_STARTED' });
+    }
+
+    const shiftOtp = generateOtp(4);
+    const updated = await prisma.eventCrewAssignment.update({
+      where: { id: assignment.id },
+      data: { shiftOtp, shiftOtpIssuedAt: new Date() },
+      include: {
+        crew: {
+          select: { id: true, fullName: true, profilePhotoUrl: true, phoneNumber: true },
+        },
+      },
+    });
+
+    if (updated.crew?.phoneNumber) {
+      await smsService.sendOtp(updated.crew.phoneNumber, shiftOtp);
+    }
+
+    return serializeValidationRow(updated);
   }
 
   async cancel(userId, bookingId, reason) {

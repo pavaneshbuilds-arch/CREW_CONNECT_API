@@ -38,6 +38,11 @@ class UserRoutes {
     this.router.post('/bookings/:id/place', validate(bookingSchema.bookingParam), bookingController.place);
     this.router.post('/bookings/:id/cancel', validate(bookingSchema.cancelBooking), bookingController.cancel);
     this.router.post('/bookings/:id/review', validate(bookingSchema.createReview), bookingController.review);
+    this.router.post(
+      '/bookings/:id/assignments/:assignmentId/otp',
+      validate(bookingSchema.issueShiftOtp),
+      bookingController.issueShiftOtp
+    );
     this.router.get('/bookings/:id', validate(bookingSchema.bookingParam), bookingController.getById);
   }
 }

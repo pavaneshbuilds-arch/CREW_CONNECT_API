@@ -438,6 +438,7 @@ model Booking {
   coupon             Coupon?                  @relation(fields: [couponId], references: [id])
   crewRequirements   BookingCrewRequirement[]
   assignments        EventCrewAssignment[]
+  supervisorSlots    BookingSupervisorSlot[]
   jobRejections      CrewJobRejection[]
   payments           Payment[]
   refunds            Refund[]
@@ -477,15 +478,21 @@ model EventCrewAssignment {
   unavailabilityNotifiedAt DateTime?        @map("unavailability_notified_at") @db.Timestamptz(6)
   shiftStartedAt           DateTime?        @map("shift_started_at") @db.Timestamptz(6)
   shiftCompletedAt         DateTime?        @map("shift_completed_at") @db.Timestamptz(6)
+  shiftOtp                 String?          @map("shift_otp") @db.VarChar(4)
+  shiftOtpIssuedAt         DateTime?        @map("shift_otp_issued_at") @db.Timestamptz(6)
+  reportsToAssignmentId    Int?             @map("reports_to_assignment_id")
   earningsAmount           Decimal?         @map("earnings_amount") @db.Decimal(10, 2)
   performanceBonus         Decimal          @default(0) @map("performance_bonus") @db.Decimal(10, 2)
   reopenedForReassignment  Boolean          @default(false) @map("reopened_for_reassignment")
   createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  booking            Booking             @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  crew               CrewMember          @relation(fields: [crewId], references: [id])
-  assignedByAdmin    Admin?              @relation(fields: [assignedByAdminId], references: [id])
+  booking            Booking                 @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  crew               CrewMember              @relation(fields: [crewId], references: [id])
+  assignedByAdmin    Admin?                  @relation(fields: [assignedByAdminId], references: [id])
+  reportsTo          EventCrewAssignment?    @relation("WaiterTeam", fields: [reportsToAssignmentId], references: [id], onDelete: SetNull)
+  teamWaiters        EventCrewAssignment[]   @relation("WaiterTeam")
+  supervisorSlot     BookingSupervisorSlot?
   dateBlocks         CrewDateBlock[]
   walletTransactions WalletTransaction[]
   penalties          CrewPenalty[]
@@ -494,7 +501,26 @@ model EventCrewAssignment {
   @@index([bookingId])
   @@index([crewId])
   @@index([status])
+  @@index([reportsToAssignmentId])
   @@map("event_crew_assignments")
+}
+
+// Precomputed waiter quotas, one row per supervisor required on the booking.
+// A slot stays unclaimed until a supervisor accepts the job.
+model BookingSupervisorSlot {
+  id                     Int      @id @default(autoincrement())
+  bookingId              Int      @map("booking_id")
+  sortOrder              Int      @map("sort_order")
+  waiterQuota            Int      @map("waiter_quota")
+  supervisorAssignmentId Int?     @unique @map("supervisor_assignment_id")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking              Booking              @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  supervisorAssignment EventCrewAssignment? @relation(fields: [supervisorAssignmentId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId, sortOrder])
+  @@map("booking_supervisor_slots")
 }
 
 model CrewJobRejection {
