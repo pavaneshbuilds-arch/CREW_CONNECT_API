@@ -1,0 +1,13 @@
+---
+description: Keep the mobile API doc in sync with backend changes the app team consumes
+alwaysApply: true
+---
+
+# Mobile API doc stays current
+
+`docs/MOBILE_API.md` is the contract shared with the mobile team. When a change affects a user or crew endpoint, request, response, error code, or screen flow, update that file in the same change.
+
+- Document the new or changed route, payload fields, and error codes.
+- Remove or rewrite sections that describe the old behavior.
+- Update the screen maps, suggested client flows, and the Android checklist when the client call sequence changes.
+- Do not leave a field in the doc after the API stops returning it.

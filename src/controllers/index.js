@@ -7,3 +7,4 @@ export { default as crewBookingController } from './crewBooking.controller.js';
 export { default as deviceController } from './device.controller.js';
 export { default as uploadController } from './upload.controller.js';
 export { default as adminController } from './admin.controller.js';
+export { default as paymentController } from './payment.controller.js';

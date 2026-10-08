@@ -14,6 +14,35 @@ async function getCrewOrThrow(crewId) {
   return crew;
 }
 
+function serializeEmergencyContact(row) {
+  return {
+    id: row.id,
+    fullName: row.name,
+    phoneNumber: row.phone,
+    relationship: row.relation,
+    photoUrl: row.photoUrl,
+  };
+}
+
+async function getEmergencyContactOrThrow(crewId, id) {
+  const row = await prisma.crewSosContact.findUnique({ where: { id } });
+  if (!row || row.crewId !== crewId) {
+    throw ApiError.notFound('Emergency contact not found', { code: 'EMERGENCY_CONTACT_NOT_FOUND' });
+  }
+  return row;
+}
+
+async function assertEmergencyPhoneAvailable(crewId, phone, exceptId) {
+  const existing = await prisma.crewSosContact.findFirst({
+    where: { crewId, phone, ...(exceptId ? { id: { not: exceptId } } : {}) },
+  });
+  if (existing) {
+    throw ApiError.conflict('This phone number is already saved as an emergency contact', {
+      code: 'EMERGENCY_CONTACT_EXISTS',
+    });
+  }
+}
+
 /**
  * Onboarding step writes are only allowed before an admin approves the profile.
  * Once approved, edits must go through the "Request Changes" flow so they can be
@@ -303,6 +332,52 @@ class CrewService {
       data: { crewId, changedFields, status: 'pending' },
     });
     return { id: request.id, status: request.status, changedFields: request.changedFields, createdAt: request.createdAt };
+  }
+
+  // --- Emergency contacts ----------------------------------------------------
+
+  async listEmergencyContacts(crewId) {
+    await getCrewOrThrow(crewId);
+    const rows = await prisma.crewSosContact.findMany({
+      where: { crewId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map(serializeEmergencyContact);
+  }
+
+  async createEmergencyContact(crewId, data) {
+    await getCrewOrThrow(crewId);
+    await assertEmergencyPhoneAvailable(crewId, data.phoneNumber);
+    const row = await prisma.crewSosContact.create({
+      data: {
+        crewId,
+        name: data.fullName,
+        phone: data.phoneNumber,
+        relation: data.relationship,
+        photoUrl: data.photoUrl || null,
+      },
+    });
+    return serializeEmergencyContact(row);
+  }
+
+  async updateEmergencyContact(crewId, id, data) {
+    await getEmergencyContactOrThrow(crewId, id);
+    if (data.phoneNumber) await assertEmergencyPhoneAvailable(crewId, data.phoneNumber, id);
+    const row = await prisma.crewSosContact.update({
+      where: { id },
+      data: {
+        ...(data.fullName !== undefined && { name: data.fullName }),
+        ...(data.phoneNumber !== undefined && { phone: data.phoneNumber }),
+        ...(data.relationship !== undefined && { relation: data.relationship }),
+        ...(data.photoUrl !== undefined && { photoUrl: data.photoUrl || null }),
+      },
+    });
+    return serializeEmergencyContact(row);
+  }
+
+  async deleteEmergencyContact(crewId, id) {
+    await getEmergencyContactOrThrow(crewId, id);
+    await prisma.crewSosContact.delete({ where: { id } });
   }
 
   async listEditRequests(crewId) {

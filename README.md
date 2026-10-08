@@ -138,6 +138,11 @@ All routes require a **crew** access token (`Authorization: Bearer …`) and act
 | POST | `/api/v1/crew/me/submit` | Submit completed profile for admin verification |
 | GET/POST | `/api/v1/crew/me/time-off` | List / add time-off (vacation, special dates off) |
 | DELETE | `/api/v1/crew/me/time-off/:id` | Remove a time-off entry |
+| GET/POST | `/api/v1/crew/me/emergency-contacts` | List / add SOS emergency contacts |
+| PATCH/DELETE | `/api/v1/crew/me/emergency-contacts/:id` | Update / remove an emergency contact |
+| GET | `/api/v1/crew/complaints/reasons` | Complaint reason dropdown |
+| GET | `/api/v1/crew/complaints/orders` | Orders this crew member can complain about |
+| GET/POST | `/api/v1/crew/complaints` | List / file a complaint against an order |
 | PATCH | `/api/v1/crew/me/online` | Online/offline toggle (+ optional location) |
 | POST/GET | `/api/v1/crew/me/edit-requests` | Post-approval "Request Changes" flow |
 | GET | `/api/v1/crew/home` | Home: today's stats + job requests + active shift |
@@ -167,6 +172,7 @@ All routes require a **user** access token and act on the caller's own record. F
 | DELETE | `/api/v1/users/me` | Soft-delete account + revoke tokens |
 | GET | `/api/v1/users/coupons` | Active coupons (hides exhausted / already-used codes) |
 | GET | `/api/v1/users/support` | Help & Support contacts |
+| GET | `/api/v1/users/home/reviews` | Home carousel of five-star written reviews |
 
 There is no admin verification for organizers. **Skip For Now** is client-only.
 

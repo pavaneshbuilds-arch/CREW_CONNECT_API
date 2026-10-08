@@ -31,9 +31,13 @@ class CrewBookingController {
     return success(res, data, { message: 'Shift started' });
   });
 
-  resendShiftOtp = catchAsync(async (req, res) => {
-    const data = await crewBookingService.resendShiftOtp(req.auth.sub, Number(req.params.id));
-    return success(res, data, { message: 'Shift code sent to the organizer' });
+  issueTeamOtp = catchAsync(async (req, res) => {
+    const data = await crewBookingService.issueTeamOtp(
+      req.auth.sub,
+      Number(req.params.id),
+      Number(req.params.assignmentId)
+    );
+    return success(res, data, { message: 'Shift code sent' });
   });
 
   complete = catchAsync(async (req, res) => {

@@ -32,8 +32,13 @@ class BookingController {
     return success(res, data, { message: 'Coupon removed' });
   });
 
-  place = catchAsync(async (req, res) => {
-    const data = await bookingService.place(req.auth.sub, Number(req.params.id));
+  createPaymentOrder = catchAsync(async (req, res) => {
+    const data = await bookingService.createPaymentOrder(req.auth.sub, Number(req.params.id));
+    return success(res, data, { message: 'Payment order created' });
+  });
+
+  verifyPayment = catchAsync(async (req, res) => {
+    const data = await bookingService.verifyPayment(req.auth.sub, Number(req.params.id), req.body);
     return success(res, data, { message: 'Booking confirmed' });
   });
 
@@ -45,6 +50,15 @@ class BookingController {
   getById = catchAsync(async (req, res) => {
     const data = await bookingService.getById(req.auth.sub, Number(req.params.id));
     return success(res, data);
+  });
+
+  issueShiftOtp = catchAsync(async (req, res) => {
+    const data = await bookingService.issueShiftOtp(
+      req.auth.sub,
+      Number(req.params.id),
+      Number(req.params.assignmentId)
+    );
+    return success(res, data, { message: 'Shift code sent' });
   });
 
   cancel = catchAsync(async (req, res) => {

@@ -71,7 +71,8 @@ export const listBookings = {
     ...pagination,
     search: Joi.string().max(150).allow(''),
     status: Joi.string().valid(
-      'pending_payment',
+      'cart',
+      'created',
       'confirmed',
       'crew_assigned',
       'in_progress',

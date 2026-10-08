@@ -2,7 +2,7 @@ import { prisma } from '../config/prisma.js';
 import ApiError from '../utils/apiError.js';
 import { activityLogService } from './index.js';
 
-const REDEEMED_STATUS = { not: 'pending_payment' };
+const REDEEMED_STATUS = { notIn: ['cart', 'created'] };
 
 function decimal(value) {
   if (value == null) return null;

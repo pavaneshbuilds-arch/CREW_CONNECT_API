@@ -13,6 +13,7 @@ const OPEN_BOOKING_STATUSES = ['confirmed'];
 const UPCOMING_ASSIGNMENT_STATUSES = ['assigned', 'confirmed'];
 const CREW_JOB_INCLUDE = {
   crewRequirements: { orderBy: { id: 'asc' } },
+  supervisorSlots: { orderBy: { sortOrder: 'asc' } },
   assignments: {
     where: { status: { in: SLOT_STATUSES } },
     include: {
@@ -234,6 +235,95 @@ function assignmentForCrew(booking, crewId) {
   return (booking.assignments || []).find((row) => row.crewId === crewId) || null;
 }
 
+function serializeValidationRow(assignment, { revealOtp }) {
+  const notStarted = UPCOMING_ASSIGNMENT_STATUSES.includes(assignment.status);
+  return {
+    assignmentId: assignment.id,
+    crewId: assignment.crew?.id ?? assignment.crewId,
+    fullName: assignment.crew?.fullName ?? null,
+    profilePhotoUrl: assignment.crew?.profilePhotoUrl ?? null,
+    role: assignment.role,
+    status: assignment.status,
+    shiftStartedAt: assignment.shiftStartedAt ?? null,
+    otp: revealOtp && notStarted ? assignment.shiftOtp ?? null : null,
+    canIssueOtp: revealOtp && notStarted,
+  };
+}
+
+function serializeTeam(booking, assignment) {
+  if (!assignment || assignment.role !== 'supervisor') return null;
+  const slot = (booking.supervisorSlots || []).find(
+    (row) => row.supervisorAssignmentId === assignment.id
+  );
+  const waiters = (booking.assignments || []).filter(
+    (row) => row.role === 'waiter' && row.reportsToAssignmentId === assignment.id
+  );
+  const canValidate = assignment.status === 'in_progress';
+  return {
+    waiterQuota: slot?.waiterQuota ?? 0,
+    assignedCount: waiters.length,
+    canValidate,
+    rows: waiters.map((row) => serializeValidationRow(row, { revealOtp: canValidate })),
+  };
+}
+
+async function attachWaitersToSupervisor(tx, bookingId, supervisorAssignmentId, quota) {
+  if (quota < 1) return;
+  const unassigned = await tx.eventCrewAssignment.findMany({
+    where: {
+      bookingId,
+      role: 'waiter',
+      reportsToAssignmentId: null,
+      status: { in: SLOT_STATUSES },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: quota,
+    select: { id: true },
+  });
+  if (!unassigned.length) return;
+  await tx.eventCrewAssignment.updateMany({
+    where: { id: { in: unassigned.map((row) => row.id) } },
+    data: { reportsToAssignmentId: supervisorAssignmentId },
+  });
+}
+
+async function claimSlotForSupervisor(tx, bookingId, supervisorAssignmentId) {
+  const slot = await tx.bookingSupervisorSlot.findFirst({
+    where: { bookingId, supervisorAssignmentId: null },
+    orderBy: { sortOrder: 'asc' },
+  });
+  if (!slot) return;
+  await tx.bookingSupervisorSlot.update({
+    where: { id: slot.id },
+    data: { supervisorAssignmentId },
+  });
+  await attachWaitersToSupervisor(tx, bookingId, supervisorAssignmentId, slot.waiterQuota);
+}
+
+async function attachWaiterToOpenSlot(tx, bookingId, waiterAssignmentId) {
+  const slots = await tx.bookingSupervisorSlot.findMany({
+    where: { bookingId, supervisorAssignmentId: { not: null } },
+    orderBy: { sortOrder: 'asc' },
+  });
+  for (const slot of slots) {
+    const filled = await tx.eventCrewAssignment.count({
+      where: {
+        bookingId,
+        role: 'waiter',
+        reportsToAssignmentId: slot.supervisorAssignmentId,
+        status: { in: SLOT_STATUSES },
+      },
+    });
+    if (filled < slot.waiterQuota) {
+      await tx.eventCrewAssignment.update({
+        where: { id: waiterAssignmentId },
+        data: { reportsToAssignmentId: slot.supervisorAssignmentId },
+      });
+      return;
+    }
+  }
+}
+
 function serializeListItem(booking, { role, coords, assignment = null } = {}) {
   const pay = payForRole(booking, role);
   const eventDate = dateToIsoDate(booking.eventDate);
@@ -321,9 +411,10 @@ function serializeDetails(booking, { crew, assignment, coords }) {
       ? formatDurationFromMs(completedAt.getTime() - startedAt.getTime())
       : formatDuration(booking.expectedDurationHours);
 
+  const otpIssued = Boolean(assignment?.shiftOtp) || Boolean(startedAt);
   const canAccept = status === 'new_request' && booking.status === 'confirmed';
   const canReject = status === 'new_request';
-  const canStartShift = status === 'accepted' && booking.status !== 'cancelled';
+  const canStartShift = status === 'accepted' && booking.status !== 'cancelled' && otpIssued;
   const canComplete = status === 'in_progress';
 
   return {
@@ -364,6 +455,7 @@ function serializeDetails(booking, { crew, assignment, coords }) {
         role: row.role,
         status: row.status,
       })),
+    team: serializeTeam(booking, assignment),
     shift: {
       startedAt,
       completedAt,
@@ -372,6 +464,7 @@ function serializeDetails(booking, { crew, assignment, coords }) {
       remainingSeconds,
       progressPercent,
       expectedDurationSeconds: Math.round((decimal(booking.expectedDurationHours) || 0) * 3600),
+      otpIssued,
     },
     payout:
       status === 'completed'
@@ -397,7 +490,6 @@ function serializeDetails(booking, { crew, assignment, coords }) {
       canStartShift,
       canVerifyStart: canStartShift,
       canComplete,
-      canResendOtp: canStartShift,
     },
     serverNow: now.toISOString(),
   };
@@ -696,6 +788,12 @@ class CrewBookingService {
           }
         }
 
+        if (created.role === 'supervisor') {
+          await claimSlotForSupervisor(tx, booking.id, created.id);
+        } else if (created.role === 'waiter') {
+          await attachWaiterToOpenSlot(tx, booking.id, created.id);
+        }
+
         const nextAssignments = [...booking.assignments, created];
         const filled = { ...booking, assignments: nextAssignments };
         if (allRolesFilled(filled) && booking.status === 'confirmed') {
@@ -771,7 +869,10 @@ class CrewBookingService {
     if (booking.status === 'cancelled') {
       throw ApiError.conflict('This booking was cancelled', { code: 'BOOKING_CANCELLED' });
     }
-    if (!booking.shiftOtp || String(code) !== String(booking.shiftOtp)) {
+    if (!assignment.shiftOtp) {
+      throw ApiError.badRequest('A shift code has not been issued yet', { code: 'SHIFT_OTP_NOT_ISSUED' });
+    }
+    if (String(code) !== String(assignment.shiftOtp)) {
       throw ApiError.badRequest('Incorrect shift code', { code: 'SHIFT_OTP_INVALID' });
     }
 
@@ -779,7 +880,7 @@ class CrewBookingService {
     await prisma.$transaction(async (tx) => {
       await tx.eventCrewAssignment.update({
         where: { id: assignment.id },
-        data: { status: 'in_progress', shiftStartedAt: startedAt },
+        data: { status: 'in_progress', shiftStartedAt: startedAt, shiftOtp: null },
       });
       if (booking.status !== 'in_progress') {
         await tx.booking.update({
@@ -802,30 +903,46 @@ class CrewBookingService {
     return this.getById(crewId, bookingId);
   }
 
-  async resendShiftOtp(crewId, bookingId) {
+  async issueTeamOtp(crewId, bookingId, assignmentId) {
     const crew = await getApprovedCrew(crewId);
     const booking = await loadBooking(bookingId);
-    const assignment = assignmentForCrew(booking, crew.id);
-    if (!assignment || !UPCOMING_ASSIGNMENT_STATUSES.includes(assignment.status)) {
-      throw ApiError.conflict('A shift code can only be resent for an accepted job', {
-        code: 'SHIFT_NOT_STARTABLE',
+    const supervisor = assignmentForCrew(booking, crew.id);
+    if (!supervisor || supervisor.role !== 'supervisor') {
+      throw ApiError.forbidden('Only a supervisor on this booking can validate waiters', {
+        code: 'SHIFT_OTP_NOT_ALLOWED',
       });
     }
     if (booking.status === 'cancelled') {
       throw ApiError.conflict('This booking was cancelled', { code: 'BOOKING_CANCELLED' });
     }
-
-    const shiftOtp = generateOtp(4);
-    await prisma.booking.update({
-      where: { id: booking.id },
-      data: { shiftOtp },
-    });
-
-    if (booking.user?.phoneNumber) {
-      await smsService.sendOtp(booking.user.phoneNumber, shiftOtp);
+    if (supervisor.status !== 'in_progress') {
+      throw ApiError.conflict('Start your shift before validating waiters', {
+        code: 'SHIFT_NOT_VALIDATING',
+      });
     }
 
-    return { sent: true };
+    const waiter = (booking.assignments || []).find((row) => row.id === assignmentId);
+    if (!waiter || waiter.role !== 'waiter' || waiter.reportsToAssignmentId !== supervisor.id) {
+      throw ApiError.notFound('Waiter assignment not found', { code: 'ASSIGNMENT_NOT_FOUND' });
+    }
+    if (!UPCOMING_ASSIGNMENT_STATUSES.includes(waiter.status)) {
+      throw ApiError.conflict('This shift has already started', { code: 'SHIFT_ALREADY_STARTED' });
+    }
+
+    const shiftOtp = generateOtp(4);
+    const updated = await prisma.eventCrewAssignment.update({
+      where: { id: waiter.id },
+      data: { shiftOtp, shiftOtpIssuedAt: new Date() },
+      include: {
+        crew: { select: { id: true, fullName: true, profilePhotoUrl: true, phoneNumber: true } },
+      },
+    });
+
+    if (updated.crew?.phoneNumber) {
+      await smsService.sendOtp(updated.crew.phoneNumber, shiftOtp);
+    }
+
+    return serializeValidationRow(updated, { revealOtp: true });
   }
 
   async complete(crewId, bookingId) {

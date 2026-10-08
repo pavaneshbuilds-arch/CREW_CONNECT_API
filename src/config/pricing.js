@@ -78,6 +78,20 @@ export const DEFAULT_SUPERVISOR_RANGES = [
   { minWaiters: 40, maxWaiters: null, supervisorCount: 5 },
 ];
 
+/**
+ * Even split of waiters across supervisors. Remainder goes on the last slots,
+ * so 50 waiters and 4 supervisors become [12, 12, 13, 13].
+ */
+export function splitWaiterQuotas(waiterCount, supervisorCount) {
+  const waiters = Math.max(0, Number(waiterCount) || 0);
+  const supervisors = Math.max(0, Number(supervisorCount) || 0);
+  if (supervisors < 1) return [];
+  const base = Math.floor(waiters / supervisors);
+  const extra = waiters % supervisors;
+  const plain = supervisors - extra;
+  return [...Array(plain).fill(base), ...Array(extra).fill(base + 1)];
+}
+
 export function supervisorCountForWaiters(waiterCount, ranges = []) {
   const waiters = Math.max(0, Number(waiterCount) || 0);
   if (!ranges.length) return 0;

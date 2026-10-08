@@ -53,6 +53,11 @@ class UserController {
     return success(res, data);
   });
 
+  listHomeReviews = catchAsync(async (req, res) => {
+    const { items, meta } = await userService.listHomeReviews(req.query);
+    return success(res, items, { meta });
+  });
+
   searchPlaces = catchAsync(async (req, res) => {
     const data = await placesService.search(req.query);
     return success(res, data);

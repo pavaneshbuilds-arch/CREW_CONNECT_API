@@ -29,6 +29,18 @@ class CrewRoutes {
     this.router.post('/me/time-off', validate(schema.addTimeOff), crewController.addTimeOff);
     this.router.delete('/me/time-off/:id', validate(schema.timeOffParam), crewController.deleteTimeOff);
 
+    // --- Emergency contacts ---
+    this.router.get('/me/emergency-contacts', crewController.listEmergencyContacts);
+    this.router.post('/me/emergency-contacts', validate(schema.createEmergencyContact), crewController.createEmergencyContact);
+    this.router.patch('/me/emergency-contacts/:id', validate(schema.updateEmergencyContact), crewController.updateEmergencyContact);
+    this.router.delete('/me/emergency-contacts/:id', validate(schema.emergencyContactParam), crewController.deleteEmergencyContact);
+
+    // --- Complaints against an order ---
+    this.router.get('/complaints/reasons', crewController.listComplaintReasons);
+    this.router.get('/complaints/orders', crewController.listComplaintOrders);
+    this.router.get('/complaints', crewController.listComplaints);
+    this.router.post('/complaints', validate(schema.createComplaint), crewController.createComplaint);
+
     // --- Online/offline toggle ---
     this.router.patch('/me/online', validate(schema.setOnline), crewController.setOnline);
 
@@ -42,7 +54,11 @@ class CrewRoutes {
     this.router.post('/bookings/:id/accept', validate(bookingSchema.bookingParam), crewBookingController.accept);
     this.router.post('/bookings/:id/reject', validate(bookingSchema.bookingParam), crewBookingController.reject);
     this.router.post('/bookings/:id/start', validate(bookingSchema.verifyStart), crewBookingController.verifyStart);
-    this.router.post('/bookings/:id/otp/resend', validate(bookingSchema.bookingParam), crewBookingController.resendShiftOtp);
+    this.router.post(
+      '/bookings/:id/team/:assignmentId/otp',
+      validate(bookingSchema.issueTeamOtp),
+      crewBookingController.issueTeamOtp
+    );
     this.router.post('/bookings/:id/complete', validate(bookingSchema.bookingParam), crewBookingController.complete);
     this.router.get('/bookings/:id', validate(bookingSchema.bookingParamWithCoords), crewBookingController.getById);
   }

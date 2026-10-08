@@ -57,7 +57,8 @@ enum AdminRole {
 }
 
 enum BookingStatus {
-  pending_payment
+  cart
+  created
   confirmed
   crew_assigned
   in_progress
@@ -87,7 +88,8 @@ enum PaymentType {
 }
 
 enum PaymentStatus {
-  pending
+  initiated
+  processing
   success
   failed
   refunded
@@ -267,6 +269,7 @@ model CrewMember {
   wallet              CrewWallet?
   penalties           CrewPenalty[]
   sosContacts         CrewSosContact[]
+  complaints          CrewComplaint[]
 
   @@map("crew_members")
 }
@@ -420,7 +423,7 @@ model Booking {
   venueLatitude          Decimal?      @map("venue_latitude") @db.Decimal(9, 6)
   venueLongitude         Decimal?      @map("venue_longitude") @db.Decimal(9, 6)
   additionalInstructions String?       @map("additional_instructions")
-  status                 BookingStatus @default(pending_payment)
+  status                 BookingStatus @default(cart)
   subtotal               Decimal?      @db.Decimal(10, 2)
   gstAmount              Decimal?      @map("gst_amount") @db.Decimal(10, 2)
   discountAmount         Decimal?      @map("discount_amount") @db.Decimal(10, 2)
@@ -438,10 +441,12 @@ model Booking {
   coupon             Coupon?                  @relation(fields: [couponId], references: [id])
   crewRequirements   BookingCrewRequirement[]
   assignments        EventCrewAssignment[]
+  supervisorSlots    BookingSupervisorSlot[]
   jobRejections      CrewJobRejection[]
   payments           Payment[]
   refunds            Refund[]
   reviews            Review[]
+  complaints         CrewComplaint[]
   scheduledReminders ScheduledReminder[]
 
   @@index([userId])
@@ -477,15 +482,21 @@ model EventCrewAssignment {
   unavailabilityNotifiedAt DateTime?        @map("unavailability_notified_at") @db.Timestamptz(6)
   shiftStartedAt           DateTime?        @map("shift_started_at") @db.Timestamptz(6)
   shiftCompletedAt         DateTime?        @map("shift_completed_at") @db.Timestamptz(6)
+  shiftOtp                 String?          @map("shift_otp") @db.VarChar(4)
+  shiftOtpIssuedAt         DateTime?        @map("shift_otp_issued_at") @db.Timestamptz(6)
+  reportsToAssignmentId    Int?             @map("reports_to_assignment_id")
   earningsAmount           Decimal?         @map("earnings_amount") @db.Decimal(10, 2)
   performanceBonus         Decimal          @default(0) @map("performance_bonus") @db.Decimal(10, 2)
   reopenedForReassignment  Boolean          @default(false) @map("reopened_for_reassignment")
   createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  booking            Booking             @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  crew               CrewMember          @relation(fields: [crewId], references: [id])
-  assignedByAdmin    Admin?              @relation(fields: [assignedByAdminId], references: [id])
+  booking            Booking                 @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  crew               CrewMember              @relation(fields: [crewId], references: [id])
+  assignedByAdmin    Admin?                  @relation(fields: [assignedByAdminId], references: [id])
+  reportsTo          EventCrewAssignment?    @relation("WaiterTeam", fields: [reportsToAssignmentId], references: [id], onDelete: SetNull)
+  teamWaiters        EventCrewAssignment[]   @relation("WaiterTeam")
+  supervisorSlot     BookingSupervisorSlot?
   dateBlocks         CrewDateBlock[]
   walletTransactions WalletTransaction[]
   penalties          CrewPenalty[]
@@ -494,7 +505,26 @@ model EventCrewAssignment {
   @@index([bookingId])
   @@index([crewId])
   @@index([status])
+  @@index([reportsToAssignmentId])
   @@map("event_crew_assignments")
+}
+
+// Precomputed waiter quotas, one row per supervisor required on the booking.
+// A slot stays unclaimed until a supervisor accepts the job.
+model BookingSupervisorSlot {
+  id                     Int      @id @default(autoincrement())
+  bookingId              Int      @map("booking_id")
+  sortOrder              Int      @map("sort_order")
+  waiterQuota            Int      @map("waiter_quota")
+  supervisorAssignmentId Int?     @unique @map("supervisor_assignment_id")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking              Booking              @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  supervisorAssignment EventCrewAssignment? @relation(fields: [supervisorAssignmentId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId, sortOrder])
+  @@map("booking_supervisor_slots")
 }
 
 model CrewJobRejection {
@@ -520,8 +550,9 @@ model Payment {
   bookingId         Int           @map("booking_id")
   paymentType       PaymentType   @map("payment_type")
   amount            Decimal       @db.Decimal(10, 2)
-  status            PaymentStatus @default(pending)
+  status            PaymentStatus @default(initiated)
   paymentGatewayRef String?       @map("payment_gateway_ref") @db.VarChar(150)
+  razorpayOrderId   String?       @unique @map("razorpay_order_id") @db.VarChar(50)
   paidAt            DateTime?     @map("paid_at") @db.Timestamptz(6)
   createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -898,17 +929,37 @@ model Notification {
   @@map("notifications")
 }
 
+model CrewComplaint {
+  id        Int      @id @default(autoincrement())
+  crewId    Int      @map("crew_id")
+  bookingId Int      @map("booking_id")
+  reason    String   @db.VarChar(50)
+  details   String
+  imageUrls String[] @default([]) @map("image_urls")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  crew    CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
+  booking Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([crewId])
+  @@index([bookingId])
+  @@map("crew_complaints")
+}
+
 model CrewSosContact {
   id        Int      @id @default(autoincrement())
   crewId    Int      @map("crew_id")
   name      String   @db.VarChar(150)
   phone     String   @db.VarChar(15)
   relation  String?  @db.VarChar(50)
+  photoUrl  String?  @map("photo_url")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
 
+  @@unique([crewId, phone])
   @@index([crewId])
   @@map("crew_sos_contacts")
 }

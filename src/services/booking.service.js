@@ -11,19 +11,31 @@ import {
   ROLE_LABELS,
   getGstPercent,
   suggestCrew,
+  splitWaiterQuotas,
   supervisorCountForWaiters,
 } from '../config/pricing.js';
 import ApiError from '../utils/apiError.js';
+import logger from '../utils/logger.js';
 import { generateOtp } from '../utils/otp.js';
-import { activityLogService, couponService, rateCardService, supervisorRangeService } from './index.js';
+import {
+  activityLogService,
+  couponService,
+  rateCardService,
+  razorpayService,
+  smsService,
+  supervisorRangeService,
+} from './index.js';
 
 const CURRENT_STATUSES = ['confirmed', 'crew_assigned', 'in_progress'];
 const PAST_STATUSES = ['completed', 'cancelled'];
+const ALL_STATUSES = ['created', ...CURRENT_STATUSES, ...PAST_STATUSES];
+const IN_FLIGHT_PAYMENT = ['initiated', 'processing'];
 const OTP_VISIBLE_STATUSES = ['confirmed', 'crew_assigned', 'in_progress'];
 const CANCELLABLE_STATUSES = ['confirmed', 'crew_assigned'];
 const SLOT_STATUSES = ['assigned', 'confirmed', 'in_progress', 'completed'];
 const CANCEL_FEE_HOURS = 24;
 const CANCEL_FEE_PCT = 50;
+const MIN_AMOUNT_PAISE = 100;
 
 const bookingDetailInclude = {
   crewRequirements: { orderBy: { id: 'asc' } },
@@ -37,6 +49,7 @@ const bookingDetailInclude = {
   },
   reviews: true,
   refunds: { orderBy: { createdAt: 'desc' } },
+  payments: { orderBy: { createdAt: 'desc' } },
 };
 
 function decimal(value) {
@@ -281,9 +294,14 @@ function serializeSummary(booking) {
     crew: crewCountsFromRequirements(booking.crewRequirements),
     staffCount: staffCountFromRequirements(booking.crewRequirements),
     ...breakdown,
+    paymentStatus: paymentStatusOf(booking),
     createdAt: booking.createdAt,
     updatedAt: booking.updatedAt,
   };
+}
+
+function paymentStatusOf(booking) {
+  return (booking.payments || [])[0]?.status ?? null;
 }
 
 function buildTimeline(booking) {
@@ -361,6 +379,7 @@ function serializeListItem(booking, { latitude, longitude } = {}) {
     crew: crewCountsFromRequirements(booking.crewRequirements),
     primaryRole: primaryRoleFromRequirements(booking.crewRequirements),
     estimatedTotal: decimal(booking.estimatedTotal),
+    paymentStatus: paymentStatusOf(booking),
     distanceKm,
     canCancel: CANCELLABLE_STATUSES.includes(booking.status),
     canReview: booking.status === 'completed' && !review,
@@ -368,15 +387,64 @@ function serializeListItem(booking, { latitude, longitude } = {}) {
   };
 }
 
+const SHIFT_STARTABLE_STATUSES = ['assigned', 'confirmed'];
+
+function validationRoles(booking) {
+  const counts = crewCountsFromRequirements(booking.crewRequirements);
+  const roles = [];
+  if (counts.supervisor > 0) roles.push('supervisor');
+  else if (counts.waiter > 0) roles.push('waiter');
+  if (counts.bouncer > 0) roles.push('bouncer');
+  return roles;
+}
+
+function shiftValidationMode(roles) {
+  if (roles.includes('supervisor')) return 'supervisors';
+  if (roles.includes('waiter')) return 'waiters';
+  return 'bouncers';
+}
+
+function serializeValidationRow(assignment) {
+  const notStarted = SHIFT_STARTABLE_STATUSES.includes(assignment.status);
+  return {
+    assignmentId: assignment.id,
+    crewId: assignment.crew?.id ?? assignment.crewId,
+    fullName: assignment.crew?.fullName ?? null,
+    profilePhotoUrl: assignment.crew?.profilePhotoUrl ?? null,
+    role: assignment.role,
+    status: assignment.status,
+    shiftStartedAt: assignment.shiftStartedAt ?? null,
+    otp: notStarted ? assignment.shiftOtp ?? null : null,
+    canIssueOtp: notStarted,
+  };
+}
+
+function buildShiftValidation(booking) {
+  const roles = validationRoles(booking);
+  const bookingOpen = OTP_VISIBLE_STATUSES.includes(booking.status);
+  const rows = roles.flatMap((role) =>
+    (booking.assignments || [])
+      .filter((row) => row.role === role)
+      .map((row) => {
+        const serialized = serializeValidationRow(row);
+        if (!bookingOpen) return { ...serialized, otp: null, canIssueOtp: false };
+        return serialized;
+      })
+  );
+  return {
+    mode: shiftValidationMode(roles),
+    rows,
+  };
+}
+
 function serializeDetails(booking) {
   const review = (booking.reviews || [])[0];
-  const showOtp = OTP_VISIBLE_STATUSES.includes(booking.status);
   return {
     ...serializeSummary(booking),
     confirmedAt: booking.confirmedAt,
     cancelledAt: booking.cancelledAt,
     cancellationReason: booking.cancellationReason,
-    shiftOtp: showOtp ? booking.shiftOtp : null,
+    shiftValidation: buildShiftValidation(booking),
     timeline: buildTimeline(booking),
     cancellation: cancellationPreview(booking),
     assignedCrew: (booking.assignments || []).map((a) => ({
@@ -414,17 +482,91 @@ async function loadOwnedBooking(userId, bookingId, include = bookingDetailInclud
   return booking;
 }
 
-function assertPendingPayment(booking) {
-  if (booking.status !== 'pending_payment') {
+function assertCart(booking) {
+  if (booking.status !== 'cart') {
     throw ApiError.conflict('This booking can no longer be edited', { code: 'BOOKING_NOT_EDITABLE' });
   }
+}
+
+function assertCreated(booking) {
+  if (booking.status !== 'created') {
+    throw ApiError.conflict('This booking can no longer be edited', { code: 'BOOKING_NOT_EDITABLE' });
+  }
+}
+
+function toPaise(rupees) {
+  const paise = Math.round((Number(rupees) + Number.EPSILON) * 100);
+  return Number.isFinite(paise) ? paise : NaN;
+}
+
+function assertPayableAmount(booking) {
+  const amountPaise = toPaise(booking.estimatedTotal);
+  if (!Number.isInteger(amountPaise) || amountPaise < MIN_AMOUNT_PAISE) {
+    throw ApiError.badRequest('Payment amount must be at least 100 paise', { code: 'AMOUNT_TOO_LOW' });
+  }
+  return amountPaise;
+}
+
+async function assertCouponRedeemable(client, booking, userId) {
+  if (!booking.couponId) return;
+  const coupon = await client.coupon.findUnique({ where: { id: booking.couponId } });
+  await couponService.assertRedeemable(coupon, { userId, bookingId: booking.id, client });
+  if (!couponService.meetsMinSpend(coupon, Number(booking.subtotal) || 0)) {
+    throw ApiError.badRequest('Booking total is below this coupon minimum spend', {
+      code: 'COUPON_MIN_SPEND',
+    });
+  }
+}
+
+async function assertReadyToPay(userId, booking) {
+  if (booking.status !== 'cart' && booking.status !== 'created') {
+    throw ApiError.conflict('This booking can no longer be edited', { code: 'BOOKING_NOT_EDITABLE' });
+  }
+  if (!booking.crewRequirements.length || booking.estimatedTotal == null) {
+    throw ApiError.badRequest('Booking is incomplete', { code: 'BOOKING_INCOMPLETE' });
+  }
+  assertVenueInServiceArea(booking.venueLatitude, booking.venueLongitude);
+  const amountPaise = assertPayableAmount(booking);
+  await prisma.$transaction(async (tx) => {
+    await assertCrewSupplyForEvent(tx, booking);
+    await assertCouponRedeemable(tx, booking, userId);
+  });
+  return amountPaise;
+}
+
+async function markPaymentCaptured(paymentId, razorpayPaymentId) {
+  await prisma.payment.update({
+    where: { id: paymentId },
+    data: {
+      status: 'success',
+      paymentGatewayRef: razorpayPaymentId,
+      paidAt: new Date(),
+    },
+  });
+}
+
+async function reloadBookingDetails(bookingId) {
+  return prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: bookingDetailInclude,
+  });
+}
+
+function paymentOrderResponse(booking, payment) {
+  return {
+    keyId: razorpayService.credentials().keyId,
+    orderId: payment.razorpayOrderId,
+    amount: toPaise(payment.amount),
+    currency: 'INR',
+    bookingId: booking.id,
+  };
 }
 
 function eventDateAdvisoryLockKeys(eventDate) {
   const ymd = dateToIsoDate(eventDate);
   const [year, month, day] = ymd.split('-').map(Number);
   return {
-    key1: 0x434352, // CCR — serializes place() per event date
+    key1: 0x434352, // CCR — serializes checkout confirm per event date
     key2: year * 10000 + month * 100 + day,
   };
 }
@@ -576,6 +718,123 @@ function quoteFromBooking(booking, coupon) {
   return { lineItems, ...computeTotals(lineItems, coupon) };
 }
 
+async function persistSupervisorSlots(tx, booking) {
+  const counts = crewCountsFromRequirements(booking.crewRequirements);
+  const quotas = splitWaiterQuotas(counts.waiter, counts.supervisor);
+  if (!quotas.length) return;
+  await tx.bookingSupervisorSlot.createMany({
+    data: quotas.map((waiterQuota, index) => ({
+      bookingId: booking.id,
+      sortOrder: index,
+      waiterQuota,
+    })),
+  });
+}
+
+async function confirmPaidBooking(userId, booking, payment, razorpayPaymentId, source) {
+  assertCreated(booking);
+  if (!booking.crewRequirements.length || booking.estimatedTotal == null) {
+    throw ApiError.badRequest('Booking is incomplete', { code: 'BOOKING_INCOMPLETE' });
+  }
+  assertVenueInServiceArea(booking.venueLatitude, booking.venueLongitude);
+
+  const chargedPaise = toPaise(payment.amount);
+  const totalPaise = toPaise(booking.estimatedTotal);
+  if (chargedPaise !== totalPaise) {
+    throw ApiError.conflict('The booking total changed. Start checkout again.', { code: 'PAYMENT_AMOUNT_CHANGED' });
+  }
+
+  const confirmedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    const current = await tx.booking.findUnique({
+      where: { id: booking.id },
+      select: { status: true },
+    });
+    if (!current || current.status !== 'created') {
+      throw ApiError.conflict('This booking can no longer be edited', { code: 'BOOKING_NOT_EDITABLE' });
+    }
+
+    await assertCrewSupplyForEvent(tx, booking);
+    await assertCouponRedeemable(tx, booking, userId);
+
+    await tx.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: 'success',
+        paymentGatewayRef: razorpayPaymentId,
+        paidAt: confirmedAt,
+      },
+    });
+    const updated = await tx.booking.updateMany({
+      where: { id: booking.id, status: 'created' },
+      data: {
+        status: 'confirmed',
+        confirmedAt,
+        advancePaidPct: 100,
+      },
+    });
+    if (updated.count !== 1) {
+      throw ApiError.conflict('This booking can no longer be edited', { code: 'BOOKING_NOT_EDITABLE' });
+    }
+    await persistSupervisorSlots(tx, booking);
+  });
+
+  await activityLogService.record({
+    category: 'payment',
+    actorType: 'user',
+    actorId: userId,
+    action: 'booking_placed',
+    referenceEntityType: 'booking',
+    referenceEntityId: booking.id,
+    metadata: {
+      bookingReference: booking.bookingReference,
+      razorpayOrderId: payment.razorpayOrderId,
+      razorpayPaymentId,
+      source: source || 'checkout',
+    },
+  });
+}
+
+/**
+ * Apply a captured Razorpay payment. Confirms the booking when the same guards
+ * as checkout verify pass. A refused confirm still stores the payment as
+ * success, then rethrows, because the money has already moved.
+ */
+async function settleCapturedPayment(userId, booking, payment, razorpayPaymentId, source) {
+  if (
+    payment.status === 'success' &&
+    payment.paymentGatewayRef === razorpayPaymentId &&
+    booking.status !== 'created'
+  ) {
+    return { confirmed: true };
+  }
+
+  if (booking.status !== 'created') {
+    throw ApiError.conflict('This booking can no longer be edited', { code: 'BOOKING_NOT_EDITABLE' });
+  }
+
+  try {
+    await confirmPaidBooking(userId, booking, payment, razorpayPaymentId, source);
+    return { confirmed: true };
+  } catch (err) {
+    if (!(err instanceof ApiError)) throw err;
+    if (err.code === 'BOOKING_NOT_EDITABLE') {
+      const fresh = await reloadBookingDetails(booking.id);
+      const currentPayment = await prisma.payment.findUnique({ where: { id: payment.id } });
+      if (
+        fresh &&
+        fresh.status !== 'created' &&
+        currentPayment?.status === 'success' &&
+        currentPayment.paymentGatewayRef === razorpayPaymentId
+      ) {
+        return { confirmed: true, booking: fresh };
+      }
+    }
+    await markPaymentCaptured(payment.id, razorpayPaymentId);
+    throw err;
+  }
+}
+
 async function persistRequirements(tx, bookingId, crewCounts, rates) {
   await tx.bookingCrewRequirement.deleteMany({ where: { bookingId } });
   const rows = CREW_ROLES.filter((role) => crewCounts[role] > 0).map((role) => ({
@@ -649,10 +908,10 @@ class BookingService {
     const existingById = body.id
       ? await loadOwnedBooking(userId, body.id)
       : null;
-    if (existingById) assertPendingPayment(existingById);
+    if (existingById) assertCart(existingById);
 
     const pendingRows = await prisma.booking.findMany({
-      where: { userId, status: 'pending_payment' },
+      where: { userId, status: 'cart' },
       include: bookingDetailInclude,
       orderBy: { updatedAt: 'desc' },
     });
@@ -692,7 +951,7 @@ class BookingService {
 
     const saved = await prisma.$transaction(async (tx) => {
       if (extrasToDelete.length) {
-        await tx.booking.deleteMany({ where: { id: { in: extrasToDelete }, userId, status: 'pending_payment' } });
+        await tx.booking.deleteMany({ where: { id: { in: extrasToDelete }, userId, status: 'cart' } });
       }
 
       let booking;
@@ -709,7 +968,7 @@ class BookingService {
             ...bookingData,
             userId,
             bookingReference: await allocateBookingReference(),
-            status: 'pending_payment',
+            status: 'cart',
           },
         });
       }
@@ -728,7 +987,7 @@ class BookingService {
   async getCart(userId) {
     await getUserOrThrow(userId);
     const booking = await prisma.booking.findFirst({
-      where: { userId, status: 'pending_payment' },
+      where: { userId, status: 'cart' },
       include: bookingDetailInclude,
       orderBy: { updatedAt: 'desc' },
     });
@@ -738,7 +997,7 @@ class BookingService {
   async applyCoupon(userId, bookingId, code) {
     await getUserOrThrow(userId);
     const booking = await loadOwnedBooking(userId, bookingId);
-    assertPendingPayment(booking);
+    assertCart(booking);
     const coupon = await couponService.findUsableByCode(code, { userId, bookingId: booking.id });
     const quote = quoteFromBooking(booking, coupon);
     if (!couponService.meetsMinSpend(coupon, quote.subtotal)) {
@@ -768,7 +1027,7 @@ class BookingService {
   async removeCoupon(userId, bookingId) {
     await getUserOrThrow(userId);
     const booking = await loadOwnedBooking(userId, bookingId);
-    assertPendingPayment(booking);
+    assertCart(booking);
     const quote = quoteFromBooking(booking, null);
 
     await prisma.booking.update({
@@ -789,54 +1048,211 @@ class BookingService {
     return serializeSummary(fresh);
   }
 
-  async place(userId, bookingId) {
+  async createPaymentOrder(userId, bookingId) {
     await getUserOrThrow(userId);
     const booking = await loadOwnedBooking(userId, bookingId);
-    assertPendingPayment(booking);
-    if (!booking.crewRequirements.length || booking.estimatedTotal == null) {
-      throw ApiError.badRequest('Booking is incomplete', { code: 'BOOKING_INCOMPLETE' });
+    if (booking.status !== 'cart' && booking.status !== 'created') {
+      throw ApiError.conflict('This booking can no longer be edited', { code: 'BOOKING_NOT_EDITABLE' });
     }
 
-    assertVenueInServiceArea(booking.venueLatitude, booking.venueLongitude);
+    const latest = await prisma.payment.findFirst({
+      where: { bookingId: booking.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (latest?.status === 'success') {
+      throw ApiError.conflict(
+        'Payment was captured but the booking is not confirmed. Retry payment verification.',
+        { code: 'PAYMENT_CAPTURED' }
+      );
+    }
+    if (booking.status === 'created' && latest && IN_FLIGHT_PAYMENT.includes(latest.status)) {
+      return paymentOrderResponse(booking, latest);
+    }
 
-    const shiftOtp = generateOtp(4);
-    const confirmedAt = new Date();
-    await prisma.$transaction(async (tx) => {
-      await assertCrewSupplyForEvent(tx, booking);
-      if (booking.couponId) {
-        const coupon = await tx.coupon.findUnique({ where: { id: booking.couponId } });
-        await couponService.assertRedeemable(coupon, { userId, bookingId: booking.id, client: tx });
-        if (!couponService.meetsMinSpend(coupon, Number(booking.subtotal) || 0)) {
-          throw ApiError.badRequest('Booking total is below this coupon minimum spend', {
-            code: 'COUPON_MIN_SPEND',
-          });
-        }
-      }
-      await tx.booking.update({
+    const amountPaise = await assertReadyToPay(userId, booking);
+    const order = await razorpayService.createOrder({
+      amount: amountPaise,
+      receipt: booking.bookingReference.slice(0, 40),
+      notes: { bookingId: String(booking.id) },
+    });
+    const amountRupees = roundMoney(amountPaise / 100);
+
+    const stored = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM bookings WHERE id = ${booking.id} FOR UPDATE`;
+      const current = await tx.booking.findUnique({
         where: { id: booking.id },
+        select: { status: true },
+      });
+      if (!current || (current.status !== 'cart' && current.status !== 'created')) {
+        throw ApiError.conflict('This booking can no longer be edited', { code: 'BOOKING_NOT_EDITABLE' });
+      }
+      const capturedNow = await tx.payment.findFirst({
+        where: { bookingId: booking.id, status: 'success' },
+        select: { id: true },
+      });
+      if (capturedNow) {
+        throw ApiError.conflict(
+          'Payment was captured but the booking is not confirmed. Retry payment verification.',
+          { code: 'PAYMENT_CAPTURED' }
+        );
+      }
+      const inFlight = await tx.payment.findFirst({
+        where: { bookingId: booking.id, status: { in: IN_FLIGHT_PAYMENT } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (inFlight) return inFlight;
+
+      const createdPayment = await tx.payment.create({
         data: {
-          status: 'confirmed',
-          confirmedAt,
-          shiftOtp,
+          bookingId: booking.id,
+          paymentType: 'advance',
+          amount: amountRupees,
+          status: 'initiated',
+          razorpayOrderId: order.id,
         },
       });
+      if (current.status === 'cart') {
+        await tx.booking.update({
+          where: { id: booking.id },
+          data: { status: 'created' },
+        });
+      }
+      return createdPayment;
     });
 
-    await activityLogService.record({
-      category: 'payment',
-      actorType: 'user',
-      actorId: userId,
-      action: 'booking_placed',
-      referenceEntityType: 'booking',
-      referenceEntityId: booking.id,
-      metadata: { bookingReference: booking.bookingReference },
+    return paymentOrderResponse(booking, stored);
+  }
+
+  async verifyPayment(userId, bookingId, body) {
+    await getUserOrThrow(userId);
+    const booking = await loadOwnedBooking(userId, bookingId);
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = body;
+
+    razorpayService.verifySignature({
+      orderId: razorpayOrderId,
+      paymentId: razorpayPaymentId,
+      signature: razorpaySignature,
     });
 
-    const fresh = await prisma.booking.findUnique({
-      where: { id: booking.id },
+    const payment = await prisma.payment.findFirst({
+      where: { bookingId: booking.id, razorpayOrderId },
+    });
+    if (!payment) {
+      throw ApiError.badRequest('Payment order does not match this booking', { code: 'PAYMENT_ORDER_MISMATCH' });
+    }
+
+    const settled = await settleCapturedPayment(userId, booking, payment, razorpayPaymentId, 'checkout');
+    if (settled.booking) return serializeDetails(settled.booking);
+    const fresh = await reloadBookingDetails(booking.id);
+    return serializeDetails(fresh);
+  }
+
+  /**
+   * Razorpay server callback. Signature is checked by the controller before this
+   * runs. Captured payments follow the same confirm path as checkout verify.
+   * Failed payments stay `failed` on a `created` booking so the organizer can retry.
+   * Unknown orders are acknowledged so Razorpay does not retry them.
+   */
+  async handleRazorpayWebhook(event) {
+    const name = event?.event;
+    const paymentEntity = event?.payload?.payment?.entity;
+    const orderId = paymentEntity?.order_id;
+    const paymentId = paymentEntity?.id;
+    if (!orderId || !paymentId) {
+      return { received: true, ignored: true };
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: { razorpayOrderId: orderId },
+    });
+    if (!payment) {
+      logger.info('Razorpay webhook for an unknown order', { event: name, orderId });
+      return { received: true, ignored: true };
+    }
+
+    if (name === 'payment.failed') {
+      if (payment.status === 'success') {
+        return { received: true, paymentStatus: 'success' };
+      }
+      await prisma.payment.updateMany({
+        where: { id: payment.id, status: { not: 'success' } },
+        data: {
+          status: 'failed',
+          paymentGatewayRef: paymentId,
+        },
+      });
+      await activityLogService.record({
+        category: 'payment',
+        actorType: 'system',
+        action: 'payment_failed',
+        referenceEntityType: 'booking',
+        referenceEntityId: payment.bookingId,
+        metadata: { razorpayOrderId: orderId, razorpayPaymentId: paymentId },
+      });
+      return { received: true, paymentStatus: 'failed', bookingConfirmed: false };
+    }
+
+    if (name === 'payment.authorized') {
+      if (payment.status === 'success' || payment.status === 'failed') {
+        return { received: true, paymentStatus: payment.status };
+      }
+      await prisma.payment.updateMany({
+        where: { id: payment.id, status: { in: IN_FLIGHT_PAYMENT } },
+        data: {
+          status: 'processing',
+          paymentGatewayRef: paymentId,
+        },
+      });
+      return { received: true, paymentStatus: 'processing', bookingConfirmed: false };
+    }
+
+    if (name !== 'payment.captured' && name !== 'order.paid') {
+      return { received: true, ignored: true };
+    }
+
+    const capturedPaise = Number(paymentEntity.amount);
+    if (capturedPaise !== toPaise(payment.amount)) {
+      logger.error('Razorpay webhook amount does not match the stored payment', {
+        orderId,
+        paymentId,
+        capturedPaise,
+        expectedPaise: toPaise(payment.amount),
+      });
+      return { received: true, ignored: true };
+    }
+
+    const booking = await prisma.booking.findUnique({
+      where: { id: payment.bookingId },
       include: bookingDetailInclude,
     });
-    return serializeDetails(fresh);
+    if (!booking) {
+      return { received: true, ignored: true };
+    }
+
+    try {
+      const settled = await settleCapturedPayment(
+        booking.userId,
+        booking,
+        payment,
+        paymentId,
+        'webhook'
+      );
+      return { received: true, paymentStatus: 'success', bookingConfirmed: settled.confirmed };
+    } catch (err) {
+      if (!(err instanceof ApiError)) throw err;
+      logger.warn('Razorpay payment captured but booking was not confirmed', {
+        code: err.code,
+        orderId,
+        paymentId,
+        bookingId: booking.id,
+      });
+      return {
+        received: true,
+        paymentStatus: 'success',
+        bookingConfirmed: false,
+        code: err.code,
+      };
+    }
   }
 
   async list(userId, query) {
@@ -844,7 +1260,7 @@ class BookingService {
     const page = query.page || 1;
     const limit = query.limit || 20;
     const tab = query.tab || 'current';
-    const statuses = tab === 'past' ? PAST_STATUSES : CURRENT_STATUSES;
+    const statuses = tab === 'past' ? PAST_STATUSES : tab === 'all' ? ALL_STATUSES : CURRENT_STATUSES;
 
     const where = { userId, status: { in: statuses } };
     const [total, rows] = await prisma.$transaction([
@@ -854,8 +1270,12 @@ class BookingService {
         include: {
           crewRequirements: true,
           reviews: { select: { id: true } },
+          payments: { orderBy: { createdAt: 'desc' }, take: 1 },
         },
-        orderBy: [{ eventDate: tab === 'past' ? 'desc' : 'asc' }, { createdAt: 'desc' }],
+        orderBy:
+          tab === 'all'
+            ? [{ createdAt: 'desc' }]
+            : [{ eventDate: tab === 'past' ? 'desc' : 'asc' }, { createdAt: 'desc' }],
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -873,6 +1293,46 @@ class BookingService {
     await getUserOrThrow(userId);
     const booking = await loadOwnedBooking(userId, bookingId);
     return serializeDetails(booking);
+  }
+
+  async issueShiftOtp(userId, bookingId, assignmentId) {
+    await getUserOrThrow(userId);
+    const booking = await loadOwnedBooking(userId, bookingId);
+    if (!OTP_VISIBLE_STATUSES.includes(booking.status)) {
+      throw ApiError.conflict('Shift codes can only be issued for an active booking', {
+        code: 'SHIFT_OTP_NOT_ISSUABLE',
+      });
+    }
+
+    const assignment = (booking.assignments || []).find((row) => row.id === assignmentId);
+    if (!assignment) {
+      throw ApiError.notFound('Crew assignment not found', { code: 'ASSIGNMENT_NOT_FOUND' });
+    }
+    if (!validationRoles(booking).includes(assignment.role)) {
+      throw ApiError.forbidden('This crew member is not validated from this order', {
+        code: 'SHIFT_OTP_NOT_ALLOWED',
+      });
+    }
+    if (!SHIFT_STARTABLE_STATUSES.includes(assignment.status)) {
+      throw ApiError.conflict('This shift has already started', { code: 'SHIFT_ALREADY_STARTED' });
+    }
+
+    const shiftOtp = generateOtp(4);
+    const updated = await prisma.eventCrewAssignment.update({
+      where: { id: assignment.id },
+      data: { shiftOtp, shiftOtpIssuedAt: new Date() },
+      include: {
+        crew: {
+          select: { id: true, fullName: true, profilePhotoUrl: true, phoneNumber: true },
+        },
+      },
+    });
+
+    if (updated.crew?.phoneNumber) {
+      await smsService.sendOtp(updated.crew.phoneNumber, shiftOtp);
+    }
+
+    return serializeValidationRow(updated);
   }
 
   async cancel(userId, bookingId, reason) {

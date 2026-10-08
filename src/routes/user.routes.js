@@ -26,6 +26,7 @@ class UserRoutes {
 
     this.router.get('/coupons', userController.listCoupons);
     this.router.get('/support', userController.getSupport);
+    this.router.get('/home/reviews', validate(schema.homeReviews), userController.listHomeReviews);
     this.router.get('/places/search', placesLimiter, validate(schema.searchPlaces), userController.searchPlaces);
 
     this.router.get('/bookings/options', bookingController.getOptions);
@@ -35,9 +36,23 @@ class UserRoutes {
     this.router.get('/bookings', validate(bookingSchema.listBookings), bookingController.list);
     this.router.post('/bookings/:id/coupon', validate(bookingSchema.applyCoupon), bookingController.applyCoupon);
     this.router.delete('/bookings/:id/coupon', validate(bookingSchema.bookingParam), bookingController.removeCoupon);
-    this.router.post('/bookings/:id/place', validate(bookingSchema.bookingParam), bookingController.place);
+    this.router.post(
+      '/bookings/:id/payment-order',
+      validate(bookingSchema.bookingParam),
+      bookingController.createPaymentOrder
+    );
+    this.router.post(
+      '/bookings/:id/payment-verify',
+      validate(bookingSchema.verifyPayment),
+      bookingController.verifyPayment
+    );
     this.router.post('/bookings/:id/cancel', validate(bookingSchema.cancelBooking), bookingController.cancel);
     this.router.post('/bookings/:id/review', validate(bookingSchema.createReview), bookingController.review);
+    this.router.post(
+      '/bookings/:id/assignments/:assignmentId/otp',
+      validate(bookingSchema.issueShiftOtp),
+      bookingController.issueShiftOtp
+    );
     this.router.get('/bookings/:id', validate(bookingSchema.bookingParam), bookingController.getById);
   }
 }

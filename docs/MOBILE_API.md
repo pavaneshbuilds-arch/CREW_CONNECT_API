@@ -35,7 +35,7 @@ Default port is `4000`. All JSON. Charset UTF-8.
 }
 ```
 
-`POST /crew/me/time-off`, `POST /crew/me/edit-requests`, `POST /users/me/addresses`, `POST /uploads`, and **create** via `PUT /users/bookings/summary` return **201**. Everything else successful is **200**.
+`POST /crew/me/time-off`, `POST /crew/me/emergency-contacts`, `POST /crew/complaints`, `POST /crew/me/edit-requests`, `POST /users/me/addresses`, `POST /uploads`, and **create** via `PUT /users/bookings/summary` return **201**. Everything else successful is **200**.
 
 ### Error envelope
 
@@ -52,11 +52,11 @@ Default port is `4000`. All JSON. Charset UTF-8.
 
 | HTTP | Typical `error.code` |
 |---|---|
-| 400 | `VALIDATION_ERROR`, `OTP_INVALID`, `OTP_EXPIRED`, `OTP_NOT_FOUND`, `PROFILE_INCOMPLETE`, `INVALID_FILE_TYPE`, `FILE_TOO_LARGE`, `FILE_REQUIRED`, `EVENT_DATE_INVALID`, `CREW_REQUIRED`, `COUPON_INVALID`, `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED`, `COUPON_USER_LIMIT`, `BOOKING_INCOMPLETE`, `SHIFT_OTP_INVALID`, `VENUE_LOCATION_REQUIRED`, `VENUE_OUT_OF_RANGE` |
+| 400 | `VALIDATION_ERROR`, `OTP_INVALID`, `OTP_EXPIRED`, `OTP_NOT_FOUND`, `PROFILE_INCOMPLETE`, `INVALID_FILE_TYPE`, `FILE_TOO_LARGE`, `FILE_REQUIRED`, `EVENT_DATE_INVALID`, `CREW_REQUIRED`, `COUPON_INVALID`, `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED`, `COUPON_USER_LIMIT`, `BOOKING_INCOMPLETE`, `SHIFT_OTP_INVALID`, `SHIFT_OTP_NOT_ISSUED`, `VENUE_LOCATION_REQUIRED`, `VENUE_OUT_OF_RANGE` |
 | 401 | `NO_APP_TOKEN` (missing X-App-Token), `INVALID_APP_TOKEN` (bad/unknown token), `APP_TOKEN_EXPIRED` (re-register device), `APP_TOKEN_REVOKED` (device banned), `NO_TOKEN`, `INVALID_TOKEN` |
-| 403 | `FORBIDDEN_TYPE`, `ACCOUNT_SUSPENDED`, `ACCOUNT_DELETED`, `NOT_APPROVED` |
-| 404 | `ROUTE_NOT_FOUND`, `CREW_NOT_FOUND`, `USER_NOT_FOUND`, `ADDRESS_NOT_FOUND`, `BOOKING_NOT_FOUND` |
-| 409 | `PROFILE_LOCKED`, `ALREADY_APPROVED`, `NOT_APPROVED`, `UNIQUE_CONSTRAINT`, `PHONE_IN_USE`, `BOOKING_NOT_EDITABLE`, `BOOKING_NOT_CANCELLABLE`, `REVIEW_NOT_ALLOWED`, `REVIEW_ALREADY_EXISTS`, `JOB_NOT_AVAILABLE`, `JOB_FULL`, `JOB_ALREADY_ACCEPTED`, `JOB_ALREADY_REJECTED`, `DATE_BLOCKED`, `SHIFT_NOT_STARTABLE`, `SHIFT_NOT_COMPLETABLE`, `BOOKING_CANCELLED`, `CREW_SHORTAGE` |
+| 403 | `FORBIDDEN_TYPE`, `ACCOUNT_SUSPENDED`, `ACCOUNT_DELETED`, `NOT_APPROVED`, `SHIFT_OTP_NOT_ALLOWED` |
+| 404 | `ROUTE_NOT_FOUND`, `CREW_NOT_FOUND`, `USER_NOT_FOUND`, `ADDRESS_NOT_FOUND`, `BOOKING_NOT_FOUND`, `ASSIGNMENT_NOT_FOUND` |
+| 409 | `PROFILE_LOCKED`, `ALREADY_APPROVED`, `NOT_APPROVED`, `UNIQUE_CONSTRAINT`, `PHONE_IN_USE`, `BOOKING_NOT_EDITABLE`, `BOOKING_NOT_CANCELLABLE`, `REVIEW_NOT_ALLOWED`, `REVIEW_ALREADY_EXISTS`, `JOB_NOT_AVAILABLE`, `JOB_FULL`, `JOB_ALREADY_ACCEPTED`, `JOB_ALREADY_REJECTED`, `DATE_BLOCKED`, `SHIFT_NOT_STARTABLE`, `SHIFT_NOT_COMPLETABLE`, `SHIFT_OTP_NOT_ISSUABLE`, `SHIFT_ALREADY_STARTED`, `SHIFT_NOT_VALIDATING`, `BOOKING_CANCELLED`, `CREW_SHORTAGE` |
 | 429 | `OTP_RATE_LIMITED`, `OTP_LOCKED`, `PLACES_RATE_LIMITED` |
 | 500 | `PLACES_NOT_CONFIGURED` (server has no `GOOGLE_PLACES_API_KEY`) |
 | 502 | `PLACES_UPSTREAM_ERROR` (Google Places timed out or rejected the request) |
@@ -108,11 +108,14 @@ Use this to wire screens that already exist in design.
 | Detail Order | `GET /crew/bookings/:id` |
 | Accept Job | `POST /crew/bookings/:id/accept` |
 | Reject | `POST /crew/bookings/:id/reject` |
-| Order Accepted / Start Shift | `GET /crew/bookings/:id` then OTP screen |
-| Shift OTP | `POST /crew/bookings/:id/start` with `{ "code" }`. Resend → `POST /crew/bookings/:id/otp/resend` |
+| Order Accepted / Start Shift | `GET /crew/bookings/:id`. Open the OTP screen only when `actions.canStartShift` is true |
+| Shift OTP | `POST /crew/bookings/:id/start` with `{ "code" }`. The organizer issues it for a supervisor, a waiter when there is no supervisor, or a bouncer. A supervisor issues it for their waiters. There is no crew resend |
+| Supervisor — validate waiters | After this supervisor’s shift is in progress, `team.canValidate` is true. Issue a code with `POST /crew/bookings/:id/team/:assignmentId/otp` |
 | Shift In Progress | `GET /crew/bookings/:id` (poll). Complete → `POST /crew/bookings/:id/complete` |
 | Shift Completed | `GET /crew/bookings/:id` (`status: "completed"`) |
 | Mark dates off / vacation | `GET/POST/DELETE /crew/me/time-off` |
+| Emergency contacts | `GET/POST /crew/me/emergency-contacts`, `PATCH/DELETE /crew/me/emergency-contacts/:id` |
+| Complaint | `GET /crew/complaints/reasons` then `GET /crew/complaints/orders`, then `POST /crew/complaints` |
 | Account / Profile | `GET /crew/me` |
 | Edit Profile (while pending/rejected) | Same PATCH/PUT as onboarding |
 | Request Changes (after approved) | `POST /crew/me/edit-requests` |
@@ -123,11 +126,9 @@ Use this to wire screens that already exist in design.
 These crew screens **cannot** be fully wired yet:
 
 - Dashboard, All Earnings
-- SOS / Emergency contacts
 - In-app notification inbox
-- Support / Complain tickets
 
-User (organizer) app: **login + Google + profile + addresses + settings + bookings**. Notification inbox and home catalog are not implemented yet.
+User (organizer) app: **login + Google + profile + addresses + settings + bookings + five-star home quotes**. Notification inbox and the rest of the home catalog are not implemented yet.
 
 ---
 
@@ -151,12 +152,16 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 | Settings | `PATCH /users/me` for `locationAccessEnabled`, `pushNotificationsEnabled`, `marketingOptIn` |
 | Coupons | `GET /users/coupons` |
 | Help & Support | `GET /users/support` |
+| Home — What Our Clients Say | `GET /users/home/reviews` |
 | Tell Us About Your Event / Choose Your Crew | `GET /users/bookings/options` then `GET /users/bookings/crew-suggestion` |
 | Confirm Your Booking | `GET /users/places/search?q=` to pick a venue, then `PUT /users/bookings/summary` (creates the cart draft + pricing) |
 | Cart | `GET /users/cart`. Edit → same `PUT /users/bookings/summary` with `id`. Apply/remove offer → coupon endpoints |
-| Proceed To Pay / Confirm Booking | `POST /users/bookings/:id/place` (**temporary**, no payment gateway yet) |
-| My Bookings | `GET /users/bookings?tab=current` or `tab=past` |
-| Order Details | `GET /users/bookings/:id` |
+| Proceed To Pay | `POST /users/bookings/:id/payment-order`, then Razorpay Checkout, then `POST /users/bookings/:id/payment-verify` |
+| My Bookings | `GET /users/bookings?tab=current` |
+| Past Bookings | `GET /users/bookings?tab=past` |
+| All Bookings | `GET /users/bookings?tab=all` (includes `created` checkout orders) |
+| Order Details | `GET /users/bookings/:id`. Crew table is `shiftValidation` |
+| Order Details — OTP for a crew row | `POST /users/bookings/:id/assignments/:assignmentId/otp` |
 | Cancel Booking | `POST /users/bookings/:id/cancel` |
 | Rate & Review | `POST /users/bookings/:id/review` |
 | Logout | `POST /auth/logout` |
@@ -164,8 +169,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 
 ### Not in this API yet (do not block UI mock; backend next)
 
-- Home — flash sale, search, Choose Your Crew catalog, Most Popular
-- Payment gateway (Razorpay/etc.). Use `POST /users/bookings/:id/place` until that lands
+- Home — flash sale, search, Choose Your Crew catalog, Most Popular. Client quotes are `GET /users/home/reviews`
 - Notification inbox
 - CMS for About / FAQ / Privacy / Terms (deep-link static URLs)
 
@@ -414,7 +418,7 @@ Upload profile photos and KYC images, then put the returned `url` on the profile
 | Form field | Type | Required | Values |
 |---|---|---|---|
 | `file` | image | yes | JPEG, PNG, or WebP. Max **5 MB**. Field name must be `file`. |
-| `purpose` | text | yes | `profile_photo` \| `aadhaar_front` \| `aadhaar_back` \| `pan_card` \| `other` |
+| `purpose` | text | yes | `profile_photo` \| `aadhaar_front` \| `aadhaar_back` \| `pan_card` \| `emergency_contact_photo` \| `complaint_image` \| `other` |
 
 Headers: `Authorization: Bearer …` and `Content-Type: multipart/form-data` (the HTTP client sets the boundary).
 
@@ -438,6 +442,8 @@ Then:
 
 - User profile photo → `PATCH /users/me` `{ "profilePhotoUrl": "<url>" }`
 - Crew profile photo → `PATCH /crew/me/personal` `{ "profilePhotoUrl": "<url>" }`
+- Crew emergency-contact photo → `POST /crew/me/emergency-contacts` `{ "photoUrl": "<url>" }` (`purpose=emergency_contact_photo`)
+- Crew complaint images → `POST /crew/complaints` `imageUrls` (`purpose=complaint_image`)
 - Aadhaar / PAN images → `PUT /crew/me/identity-documents` with `aadhaarFrontUrl` / `aadhaarBackUrl` / `panCardUrl`
 
 On a **physical phone** talking to your PC, set `PUBLIC_BASE_URL` on the server to a LAN IP (`http://192.168.x.x:4000`). Android emulator: `http://10.0.2.2:4000`.
@@ -601,6 +607,32 @@ Static Help & Support contacts (`SUPPORT_EMAIL`, `SUPPORT_PHONE`, `SUPPORT_WHATS
 }
 ```
 
+### `GET /users/home/reviews`
+
+"What Our Clients Say" on the organizer Home screen. Five-star reviews that include written text, newest first. No job title. Reviews with no `reviewText`, or from a deleted account, are omitted.
+
+**Auth:** Bearer, `type` must be `"user"`.
+
+Query: `page` (default 1), `limit` (default 10, max 50). Use a small `limit` for the carousel and raise it, or follow `meta`, for All.
+
+```json
+{
+  "data": [
+    {
+      "id": 4,
+      "rating": 5,
+      "reviewText": "From booking to event execution, the entire experience was smooth and reliable.",
+      "fullName": "Priya Reddy",
+      "profilePhotoUrl": "http://localhost:4000/uploads/user/3/photo.jpg",
+      "createdAt": "2026-10-01T08:00:00.000Z"
+    }
+  ],
+  "meta": { "page": 1, "limit": 10, "total": 1, "totalPages": 1 }
+}
+```
+
+`profilePhotoUrl` and `fullName` may be `null`.
+
 ### `GET /users/places/search`
 
 Venue / address typeahead. Proxies Google Places with a Hyderabad location bias (`SERVICE_CENTER_*` / `SERVICE_RADIUS_KM`). Name queries match place titles; an address or pincode is resolved to a point, then nearby venues at that location are returned (so searching a street or PIN can still surface the hall). The Places API key stays on the server — do not put it in the app.
@@ -657,7 +689,7 @@ Copy a selected row into:
 
 All routes: Bearer + token `type` must be `"user"`.
 
-The cart holds **one** `pending_payment` draft per user. Completing the three booking steps calls summary; Cart reads that draft. Payment is not integrated yet — `POST /users/bookings/:id/place` marks the draft `confirmed`, generates a 4-digit shift OTP, and moves it into My Bookings.
+The cart holds **one** `cart` draft per user. That draft has no payment, so a new summary replaces it. Completing the three booking steps calls summary; Cart reads that draft. Proceed To Pay creates a Razorpay order, sets the booking to `created`, and moves it out of the cart into All Bookings. Verify or the webhook then sets it to `confirmed`. No booking-wide shift code is created.
 
 Pricing is computed on the server (do not send rates or totals):
 
@@ -723,8 +755,8 @@ Waiters = `ceil(guestCount / coverRatio)` (min 1). Supervisor count is looked up
 
 Create or update the cart draft. **201** when a new booking is created, **200** when an existing draft is updated.
 
-- Omit `id`: update the user’s existing `pending_payment` row, or create one. Extra drafts for the same user are removed so the cart stays a single booking.
-- With `id`: that booking must be owned and still `pending_payment`. **409 `BOOKING_NOT_EDITABLE`** otherwise.
+- Omit `id`: update the user’s existing `cart` row, or create one. Other `cart` drafts for the same user are removed. A `created` booking is never replaced.
+- With `id`: that booking must be owned and still `cart`. **409 `BOOKING_NOT_EDITABLE`** otherwise, including a `created` checkout.
 
 ```json
 {
@@ -747,7 +779,7 @@ Create or update the cart draft. **201** when a new booking is created, **200** 
 
 `expectedDurationHours` is a number from **1 to 24** (one decimal allowed). It is **not** used in the quote. `eventDate` is `YYYY-MM-DD` (not in the past). `eventStartTime` is `HH:mm`. At least one crew count must be greater than 0.
 
-When the API has a service-area center configured, `venueLatitude` and `venueLongitude` are required. The venue must be within **50 km** of Hyderabad. **400 `VENUE_LOCATION_REQUIRED`** if either coordinate is missing. **400 `VENUE_OUT_OF_RANGE`** if Haversine distance is greater than the radius (`details.distanceKm`, `details.maxKm`). The same check runs on `POST /users/bookings/:id/place`. Prefer `GET /users/places/search` so the app sends a real place name and coordinates instead of free-typed text.
+When the API has a service-area center configured, `venueLatitude` and `venueLongitude` are required. The venue must be within **50 km** of Hyderabad. **400 `VENUE_LOCATION_REQUIRED`** if either coordinate is missing. **400 `VENUE_OUT_OF_RANGE`** if Haversine distance is greater than the radius (`details.distanceKm`, `details.maxKm`). The same check runs on `POST /users/bookings/:id/payment-order` and again on `POST /users/bookings/:id/payment-verify`. Prefer `GET /users/places/search` so the app sends a real place name and coordinates instead of free-typed text.
 
 Supervisor count is raised to the admin waiter-range minimum for the submitted waiter count (`GET /users/bookings/options` → `supervisorRanges`). If the organizer sends a **higher** supervisor count, that value is kept. The saved draft, quote, and `data.crew` use the **server** counts — the app should display those, not the request body.
 
@@ -762,7 +794,7 @@ Response (same shape as Cart). `rates` are the snapshotted per-person event amou
   "data": {
     "id": 12,
     "bookingReference": "PC-96891",
-    "status": "pending_payment",
+    "status": "cart",
     "eventType": "Wedding Reception",
     "guestCount": 100,
     "foodServiceType": "Plated Dining",
@@ -803,6 +835,7 @@ Response (same shape as Cart). `rates` are the snapshotted per-person event amou
     "discountAmount": 0,
     "estimatedTotal": 5900,
     "coupon": null,
+    "paymentStatus": null,
     "createdAt": "2026-09-07T17:00:00.000Z",
     "updatedAt": "2026-09-07T17:00:00.000Z"
   }
@@ -811,23 +844,65 @@ Response (same shape as Cart). `rates` are the snapshotted per-person event amou
 
 ### `GET /users/cart`
 
-Latest `pending_payment` booking, or `data: null` if the cart is empty.
+Latest `cart` booking, or `data: null` if the cart is empty. A `created` checkout is not returned here. `paymentStatus` on a cart draft is `null`.
 
 ### `POST /users/bookings/:id/coupon`
 
-Body `{ "code": "LUXURYLAUNCH" }`. Only `pending_payment`. Recalculates discount, GST, and total.
+Body `{ "code": "LUXURYLAUNCH" }`. Only `cart`. Recalculates discount, GST, and total.
 
-**400** `COUPON_INVALID` (unknown / inactive / expired), `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED` (global `maxUses` exhausted), `COUPON_USER_LIMIT` (`maxUsesPerUser`, including one-time-use). `POST /users/bookings/:id/place` re-checks the same rules before confirming.
+**400** `COUPON_INVALID` (unknown / inactive / expired), `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED` (global `maxUses` exhausted), `COUPON_USER_LIMIT` (`maxUsesPerUser`, including one-time-use). Payment order and payment verify re-check the same rules before confirming.
 
 ### `DELETE /users/bookings/:id/coupon`
 
 Removes the offer and recalculates totals.
 
-### `POST /users/bookings/:id/place`
+### `POST /users/bookings/:id/payment-order`
 
-**Temporary stand-in for the payment gateway.** Sets status to `confirmed`, stores `confirmedAt`, generates a 4-digit `shiftOtp`. No `Payment` row is written. **409 `BOOKING_NOT_EDITABLE`** if not `pending_payment`. Re-checks the Hyderabad 50 km venue rule (**400 `VENUE_LOCATION_REQUIRED`** / **400 `VENUE_OUT_OF_RANGE`**).
+Starts Razorpay Checkout for the full `estimatedTotal`. No body. The server converts rupees to paise (`estimatedTotal × 100`) and creates the Razorpay order. The client cannot send an amount.
 
-Before confirming, the API counts **approved, active** crew for each required role who are free on the event date (not already assigned to another event, not on time off). Unfilled slots on other **confirmed / crew_assigned / in_progress** bookings for that date also reserve capacity, even if nobody has accepted yet. If any role is short, it returns **409 `CREW_SHORTAGE`** and does not place the order.
+**409 `BOOKING_NOT_EDITABLE`** if the booking is not `cart` or `created`. From `cart`, this sets status to `created` and writes a payment with `paymentStatus` `initiated`. Calling it again while that payment is `initiated` or `processing` returns the same `orderId` and does not create another Razorpay order. After `paymentStatus` `failed`, it starts a new payment and a new Razorpay order; the failed row is kept. **400 `BOOKING_INCOMPLETE`** if the quote is missing. **400 `AMOUNT_TOO_LOW`** if the total is under 100 paise. Re-checks the Hyderabad 50 km venue rule (**400 `VENUE_LOCATION_REQUIRED`** / **400 `VENUE_OUT_OF_RANGE`**) and the coupon rules above. **409 `CREW_SHORTAGE`** uses the same shortage payload as verify (below) and does not create an order.
+
+**500 `PAYMENT_NOT_CONFIGURED`** when Razorpay keys are missing. **401 `PAYMENT_GATEWAY_AUTH`** when Razorpay rejects the keys. **500 `PAYMENT_GATEWAY_ERROR`** for other Razorpay failures. **409 `PAYMENT_CAPTURED`** when money was already captured for this booking but it is still `created` — call verify again instead of starting a new order.
+
+`data.keyId` is the public Razorpay key. The key secret is never returned. `data.amount` is an integer in paise. `data.currency` is `INR`. Open Checkout with `keyId`, `orderId`, and `amount`. A later call replaces the stored order id; verify accepts only the latest one.
+
+```json
+{
+  "success": true,
+  "message": "Payment order created",
+  "data": {
+    "keyId": "rzp_test_xxxxxxxx",
+    "orderId": "order_EKwxwAgItmmXdp",
+    "amount": 590000,
+    "currency": "INR",
+    "bookingId": 12
+  }
+}
+```
+
+### `POST /users/bookings/:id/payment-verify`
+
+Confirms the booking after Checkout. Body:
+
+```json
+{
+  "razorpayOrderId": "order_EKwxwAgItmmXdp",
+  "razorpayPaymentId": "pay_29QQoUBi66xm2f",
+  "razorpaySignature": "9ef4dffbfd84f1318f6739a3ce19f9d85851857ae648f114332d8401e0949a3d"
+}
+```
+
+The server checks `HMAC-SHA256(razorpayOrderId + "|" + razorpayPaymentId)` against `razorpaySignature`. **400 `PAYMENT_SIGNATURE_INVALID`** when they differ — the booking stays unpaid. **400 `VALIDATION_ERROR`** when a field is missing. **400 `PAYMENT_ORDER_MISMATCH`** when the order id is not the latest one stored for this booking.
+
+On a match, the booking becomes `confirmed`, `confirmedAt` is set, `advancePaidPct` is set to `100`, and a `Payment` row is marked `success` with `paymentGatewayRef` set to the Razorpay payment id. The response is the same order-details shape as `GET /users/bookings/:id`. Sending the same three ids again returns that booking.
+
+Razorpay also calls `POST /payments/razorpay/webhook` (no app token). The app should still call verify. `payment.authorized` sets `paymentStatus` to `processing` and leaves the booking `created`. If Checkout succeeds and verify never runs, the webhook marks the payment `success` and confirms the booking when the guards pass. `payment.failed` sets that payment to `failed` and leaves the booking `created`, so it stays in All Bookings and the organizer can call payment-order again. Do not start a second checkout while `paymentStatus` is `initiated` or `processing`. After a dropped verify, refresh with `GET /users/bookings/:id` or `GET /users/bookings?tab=all`.
+
+When the booking’s supervisor count is greater than 0, verify also stores one waiter quota per supervisor. Waiters are split evenly and the remainder goes on the **last** slots (50 waiters and 4 supervisors → 12, 12, 13, 13). Nobody is attached to a supervisor until they accept the job. Below the admin staffing threshold the supervisor count is 0, so no quotas are stored.
+
+Before confirming, the API counts **approved, active** crew for each required role who are free on the event date (not already assigned to another event, not on time off). Unfilled slots on other **confirmed / crew_assigned / in_progress** bookings for that date also reserve capacity, even if nobody has accepted yet. If any role is short, it returns **409 `CREW_SHORTAGE`** and does not confirm the booking. Because Checkout already captured the money, the payment is still stored as `success`. Retry verify once crew are available. Do not call payment-order again.
+
+**409 `PAYMENT_AMOUNT_CHANGED`** if the booking total no longer matches the Razorpay order. The payment is stored as `success` and the booking stays `created`. **409 `BOOKING_NOT_EDITABLE`** if the booking is no longer `created` and this payment id is not the one that confirmed it.
 
 ```json
 {
@@ -851,25 +926,82 @@ My Bookings list. Query:
 
 | Param | Notes |
 |---|---|
-| `tab` | `current` (default) = `confirmed`, `crew_assigned`, `in_progress`. `past` = `completed`, `cancelled` |
+| `tab` | `current` (default, My Bookings) = `confirmed`, `crew_assigned`, `in_progress`. `past` = `completed`, `cancelled`. `all` = every status except `cart`, including `created` |
 | `page` / `limit` | Pagination (default 1 / 20, max 100) |
 | `latitude` / `longitude` | Optional pair; when both sent, `distanceKm` is Haversine vs venue |
 
 `data` is an array; `meta` is `{ page, limit, total, totalPages }`.
 
-Each item includes `crew` counts, `primaryRole` (highest crew count), `staffCount`, `expectedDurationHours`, `estimatedTotal`, `canCancel`, `canReview`, `reviewSubmitted`, `distanceKm` (or `null`).
+Each item includes `crew` counts, `primaryRole` (highest crew count), `staffCount`, `expectedDurationHours`, `estimatedTotal`, `paymentStatus` (`initiated`, `processing`, `success`, `failed`, `refunded`, or `null`), `canCancel`, `canReview`, `reviewSubmitted`, `distanceKm` (or `null`). `tab=all` is ordered newest first.
 
 ### `GET /users/bookings/:id`
 
 Order Details. Same summary fields (`expectedDurationHours`, snapshotted `rates`, `lineItems` as `count × rate`) plus:
 
-- `shiftOtp` — 4 digits while status is `confirmed`, `crew_assigned`, or `in_progress`; otherwise `null`
+- `shiftValidation` — the crew table this organizer validates. See below.
 - `timeline` — `{ key, label, at, done }` for order placed, confirmed, crew assigned, completed (and cancelled if applicable)
 - `cancellation` — `{ allowed, within24Hours, feePct, refundPct, feeAmount, refundAmount, hoursUntilEvent }`
 - `assignedCrew` — `{ id, fullName, profilePhotoUrl, role, status }[]`
 - `review` — submitted review or `null`
 
 **404 `BOOKING_NOT_FOUND`** if it is not this user’s booking.
+
+`shiftValidation.mode` comes from the crew stored on the booking:
+
+| `mode` | Organizer rows |
+|---|---|
+| `supervisors` | Accepted supervisors. Those supervisors later validate their own waiters. |
+| `waiters` | Accepted waiters. Used when the booking has no supervisors. |
+| `bouncers` | Accepted bouncers only. Used when the booking is bouncers and nobody else. |
+
+If the booking’s bouncer count is greater than 0, accepted bouncers are extra rows on this same table, after the supervisors or waiters. That does not depend on waiter count or supervisor count. The organizer issues each bouncer’s code with the same OTP button used for a supervisor. A bouncer then enters that code to start their own shift. A bouncer does not validate waiters or anyone else.
+
+Rows appear as people accept. Empty quota slots are not shown. Render `rows`; a `supervisors` or `waiters` table can also contain `role: "bouncer"`.
+
+Each row: `assignmentId`, `crewId`, `fullName`, `profilePhotoUrl`, `role`, `status`, `shiftStartedAt`, `otp`, `canIssueOtp`.
+
+- `otp` is the current 4-digit code while that person’s shift has not started, or `null` if none has been issued yet or the shift has already started.
+- `canIssueOtp` is true only while the booking is `confirmed`, `crew_assigned`, or `in_progress` and that assignment is still `assigned` or `confirmed`.
+
+```json
+{
+  "shiftValidation": {
+    "mode": "supervisors",
+    "rows": [
+      {
+        "assignmentId": 41,
+        "crewId": 8,
+        "fullName": "Anita Rao",
+        "profilePhotoUrl": "https://…",
+        "role": "supervisor",
+        "status": "confirmed",
+        "shiftStartedAt": null,
+        "otp": "1846",
+        "canIssueOtp": true
+      },
+      {
+        "assignmentId": 44,
+        "crewId": 12,
+        "fullName": "Ravi Kumar",
+        "profilePhotoUrl": "https://…",
+        "role": "bouncer",
+        "status": "confirmed",
+        "shiftStartedAt": null,
+        "otp": null,
+        "canIssueOtp": true
+      }
+    ]
+  }
+}
+```
+
+### `POST /users/bookings/:id/assignments/:assignmentId/otp`
+
+OTP button on a `shiftValidation` row. No body. Generates a new 4-digit code for that assignment (replaces an unused code), SMS-stubs it to **that crew member’s phone** (dev: logged to the server console), and returns the updated row including `otp` so the organizer can read it out.
+
+The organizer can issue a code for any row in `shiftValidation.rows`: supervisors or waiters for `mode`, and bouncers whenever the booking includes them. A waiter on a supervisor booking is rejected.
+
+**409 `SHIFT_OTP_NOT_ISSUABLE`** if the booking is not `confirmed`, `crew_assigned`, or `in_progress`. **404 `ASSIGNMENT_NOT_FOUND`**. **403 `SHIFT_OTP_NOT_ALLOWED`** if this row is not one the organizer validates. **409 `SHIFT_ALREADY_STARTED`** if that shift has already started.
 
 ### `POST /users/bookings/:id/cancel`
 
@@ -1073,6 +1205,102 @@ Weekly availability is **not stored**. Open jobs appear unless the crew member i
 
 ---
 
+### Emergency contacts
+
+Trusted people notified in an emergency. **Select from Contacts** is device-only: read the phone book on the device, then send the same create body. An empty list is `data: []` (empty state). Photo is optional; omit it or send `null` to keep the placeholder avatar.
+
+Auth: Bearer, `type` must be `"crew"`. Available before and after profile approval.
+
+**`GET /crew/me/emergency-contacts`**
+
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "fullName": "David Miller",
+      "phoneNumber": "+15559876543",
+      "relationship": "Brother",
+      "photoUrl": "http://localhost:4000/uploads/crew/12/photo.jpg"
+    }
+  ]
+}
+```
+
+`relationship` is the label from the dropdown (for example `Family`, `Brother`, `Best Friend`, `Father`). `photoUrl` is `null` when no photo was saved.
+
+**`POST /crew/me/emergency-contacts`** — **201**. Upload the photo first when the crew member picks one (`POST /uploads` with `purpose=emergency_contact_photo`), then send that `url` as `photoUrl`.
+
+```json
+{
+  "fullName": "Sarah Jenkins",
+  "phoneNumber": "+15550000000",
+  "relationship": "Family",
+  "photoUrl": "http://localhost:4000/uploads/crew/12/photo.jpg"
+}
+```
+
+`phoneNumber` is 8–15 digits, optional leading `+`, at most 15 characters (no spaces or brackets). **409 `EMERGENCY_CONTACT_EXISTS`** if this crew member already saved that number.
+
+**`PATCH /crew/me/emergency-contacts/:id`** — same fields, at least one. Send `photoUrl: null` or `""` to clear the photo. **404 `EMERGENCY_CONTACT_NOT_FOUND`** if the id is missing or belongs to someone else.
+
+**`DELETE /crew/me/emergency-contacts/:id`** — **404 `EMERGENCY_CONTACT_NOT_FOUND`** on a bad id.
+
+---
+
+### Complaints
+
+A complaint is filed against one order this crew member has accepted. Open job requests are not selectable. Auth: Bearer, `type` must be `"crew"`.
+
+**`GET /crew/complaints/reasons`** — dropdown.
+
+```json
+{
+  "data": [
+    { "code": "customer_not_available", "label": "Customer Not Available" },
+    { "code": "payment_issue", "label": "Payment Issue" },
+    { "code": "safety_concern", "label": "Safety Concern" },
+    { "code": "venue_problem", "label": "Venue Problem" },
+    { "code": "other", "label": "Other" }
+  ]
+}
+```
+
+**`GET /crew/complaints/orders`** — order picker. Assignments in `assigned`, `confirmed`, `in_progress`, or `completed`. Cancelled bookings are omitted.
+
+```json
+{
+  "data": [
+    {
+      "bookingId": 12,
+      "orderId": "PC-12345",
+      "status": "accepted",
+      "eventDate": "2026-10-06",
+      "venueName": "Taj Convention Center"
+    }
+  ]
+}
+```
+
+`status` is the crew-facing job status: `accepted`, `in_progress`, or `completed`.
+
+**`POST /crew/complaints`** — **201**. Upload each image first (`POST /uploads`, `purpose=complaint_image`), then send the returned URLs as `imageUrls` (optional, max 5). `details` is required.
+
+```json
+{
+  "bookingId": 12,
+  "reason": "customer_not_available",
+  "details": "Reached the venue and the organizer was not there.",
+  "imageUrls": ["http://localhost:4000/uploads/crew/12/photo.jpg"]
+}
+```
+
+**404 `ORDER_NOT_FOUND`** if `bookingId` is not in the picker. More than one complaint per order is allowed.
+
+**`GET /crew/complaints`** — this crew member’s complaints, newest first. Each row includes `id`, `bookingId`, `orderId`, `venueName`, `eventDate`, `reason`, `reasonLabel`, `details`, `imageUrls`, `createdAt`.
+
+---
+
 ### `PATCH /crew/me/online` — Home toggle
 
 ```json
@@ -1093,11 +1321,13 @@ Weekly availability is **not stored**. Open jobs appear unless the crew member i
 
 All routes: Bearer + token `type` must be `"crew"`. Profile must be **approved** (`403 NOT_APPROVED` otherwise).
 
-After an organizer confirms a booking (`POST /users/bookings/:id/place`), it is broadcast to **approved** crew whose `primaryRole` still has an open slot. Pay is **this crew member’s** fixed event rate from the admin rate card (snapshotted on the booking), not hours × rate and not the organizer’s `estimatedTotal`. Hours are shown on the order for the shift length only.
+After an organizer confirms a booking (`POST /users/bookings/:id/payment-verify`), it is broadcast to **approved** crew whose `primaryRole` still has an open slot. Pay is **this crew member’s** fixed event rate from the admin rate card (snapshotted on the booking), not hours × rate and not the organizer’s `estimatedTotal`. Hours are shown on the order for the shift length only.
 
 Crew-facing `status` values: `new_request` → `accepted` → `in_progress` → `completed` (or `cancelled`).
 
-The 4-digit **shift OTP** is generated when the organizer places the booking and is shown on **`GET /users/bookings/:id`** (`shiftOtp`). The crew member enters that code at the venue to start the shift. It is never returned on crew APIs.
+Shift start is per person. The organizer issues a code for each supervisor (or, when the booking has no supervisors, for each waiter) from Order Details. Accepted bouncers are on that same table whenever the booking includes them, and the organizer issues their code the same way. A supervisor whose own shift is already in progress then issues a code for each waiter assigned to them. A bouncer does not issue codes for anyone else (`team` stays `null`). The crew member types that code on Start Shift. The code is returned only to the person who issued it. It is never returned on the crew member’s own payload.
+
+On accept, waiters are attached to supervisors using the quotas stored when payment is verified. If waiters accept before any supervisor, they stay unassigned until a supervisor accepts and claims the next open quota. If a supervisor accepts first, later waiters are attached to the earliest supervisor slot that still has room. A waiter’s `team` is not their concern; a supervisor’s `team.rows` lists only the waiters assigned to them.
 
 ### `GET /crew/home`
 
@@ -1203,6 +1433,7 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
       "total": 800
     },
     "assignedCrew": [],
+    "team": null,
     "shift": {
       "startedAt": null,
       "completedAt": null,
@@ -1210,7 +1441,8 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
       "elapsedSeconds": 0,
       "remainingSeconds": 0,
       "progressPercent": 0,
-      "expectedDurationSeconds": 21600
+      "expectedDurationSeconds": 21600,
+      "otpIssued": false
     },
     "payout": null,
     "performance": null,
@@ -1219,15 +1451,25 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
       "canReject": true,
       "canStartShift": false,
       "canVerifyStart": false,
-      "canComplete": false,
-      "canResendOtp": false
+      "canComplete": false
     },
     "serverNow": "2026-09-08T15:30:00.000Z"
   }
 }
 ```
 
-Drive the footer from `actions`. After accept, `canStartShift` is true — open the OTP screen (no extra API). After verify, poll this endpoint for the timer (`elapsedSeconds` / `remainingSeconds` / `progressPercent`); prefer a client timer from `shift.startedAt` + `expectedDurationSeconds`, using `serverNow` to sync.
+Drive the footer from `actions`. `shift.otpIssued` becomes true once a code has been issued for this crew member (it stays true after the shift starts). `canStartShift` / `canVerifyStart` are true only while `status` is `accepted`, the booking is not cancelled, and a code is waiting. Do not open the OTP screen before that. The code itself is not in this payload.
+
+`team` is `null` unless this crew member is a supervisor on the booking. For a supervisor:
+
+| Field | Meaning |
+|---|---|
+| `waiterQuota` | How many waiters this supervisor’s slot holds |
+| `assignedCount` | Waiters already attached to them |
+| `canValidate` | True only after **this supervisor’s** shift is `in_progress` |
+| `rows` | Same shape as the organizer’s `shiftValidation.rows`, but only their waiters. `otp` and `canIssueOtp` are set only when `canValidate` is true and that waiter has not started |
+
+After verify, poll this endpoint for the timer (`elapsedSeconds` / `remainingSeconds` / `progressPercent`); prefer a client timer from `shift.startedAt` + `expectedDurationSeconds`, using `serverNow` to sync.
 
 On **completed**, `payout` and `performance` are filled (rating comes from the organizer’s review when present).
 
@@ -1236,6 +1478,8 @@ On **completed**, `payout` and `performance` are filled (rating comes from the o
 ### `POST /crew/bookings/:id/accept`
 
 No body. Creates a `self_assigned` assignment, blocks that event date, and fills the role slot. When every role is filled the booking becomes `crew_assigned`.
+
+If the booking has supervisors, accept also fills waiter quotas: a supervisor claims the next open slot and pulls already-accepted unassigned waiters up to that quota; a waiter is attached to the earliest claimed slot that still has room, or left unassigned if none does.
 
 **409** `JOB_FULL` / `JOB_NOT_AVAILABLE` / `JOB_ALREADY_ACCEPTED` / `JOB_ALREADY_REJECTED` / `DATE_BLOCKED` / `BOOKING_CANCELLED`.
 
@@ -1257,11 +1501,15 @@ Start Shift — verify the 4-digit venue code.
 { "code": "1846" }
 ```
 
-**400 `SHIFT_OTP_INVALID`**. **409 `SHIFT_NOT_STARTABLE`** if the job is not accepted. Response is the detail payload (`status: "in_progress"`).
+**400 `SHIFT_OTP_NOT_ISSUED`** if nobody has issued a code for this assignment yet. **400 `SHIFT_OTP_INVALID`** if the code does not match. **409 `SHIFT_NOT_STARTABLE`** if the job is not accepted. Response is the detail payload (`status: "in_progress"`). The first start on the booking also sets the booking status to `in_progress`.
 
-### `POST /crew/bookings/:id/otp/resend`
+### `POST /crew/bookings/:id/team/:assignmentId/otp`
 
-Regenerates the booking OTP and SMS-stubs it to the **organizer** (dev: logged to the server console). The crew app does not receive the code. **200:** `{ "sent": true }`.
+Supervisor validates one assigned waiter. No body. Allowed only when this caller is a supervisor on the booking and their own shift is `in_progress`. `:assignmentId` must be a waiter whose `reportsTo` assignment is this supervisor.
+
+Generates a new 4-digit code (replaces an unused one), SMS-stubs it to that waiter’s phone (dev: logged to the server console), and returns the waiter row including `otp`.
+
+**403 `SHIFT_OTP_NOT_ALLOWED`** if the caller is not a supervisor on this booking. **409 `SHIFT_NOT_VALIDATING`** if the supervisor’s shift has not started. **404 `ASSIGNMENT_NOT_FOUND`** if that waiter is not on this supervisor’s team. **409 `SHIFT_ALREADY_STARTED`** if the waiter’s shift has already started. **409 `BOOKING_CANCELLED`**.
 
 ### `POST /crew/bookings/:id/complete`
 
@@ -1337,9 +1585,19 @@ GET /crew/me
     Detail Order → GET /crew/bookings/:id
     Accept / Reject → POST /crew/bookings/:id/accept | reject
     Start Shift OTP → POST /crew/bookings/:id/start { code }
-    Resend code → POST /crew/bookings/:id/otp/resend
+      only when actions.canStartShift (a code was issued for this person)
+    Supervisor validates waiters → POST /crew/bookings/:id/team/:assignmentId/otp
+      only when team.canValidate
     Shift In Progress / Complete → GET /crew/bookings/:id ; POST /crew/bookings/:id/complete
     Time off → GET/POST/DELETE /crew/me/time-off
+    Emergency contacts → GET /crew/me/emergency-contacts
+      Add → optional POST /uploads (purpose=emergency_contact_photo) then POST /crew/me/emergency-contacts
+      Edit → PATCH /crew/me/emergency-contacts/:id
+      Remove → DELETE /crew/me/emergency-contacts/:id
+    Complaint → GET /crew/complaints/reasons
+      Pick order → GET /crew/complaints/orders
+      Images → POST /uploads (purpose=complaint_image), up to 5
+      Submit → POST /crew/complaints { bookingId, reason, details, imageUrls }
     Account → GET /crew/me
     Logout → POST /auth/logout
 ```
@@ -1371,6 +1629,7 @@ GET /users/me  (or login payload)
     GET /users/places/search?q=  (pick a match)
     POST /users/me/addresses  (map confirm or manual form; lat/lng from Places)
   else → Home
+    What Our Clients Say → GET /users/home/reviews
 
 Account → GET /users/me
 Edit Profile → PATCH /users/me
@@ -1382,9 +1641,19 @@ Book event → GET /users/bookings/options + GET /users/bookings/crew-suggestion
   → GET /users/places/search?q=  (venue)
   → PUT /users/bookings/summary  (venueName, venueAddress, venueLatitude, venueLongitude from Places)
 Cart → GET /users/cart  (edit: PUT /users/bookings/summary; coupon: POST/DELETE /users/bookings/:id/coupon)
-Pay / confirm → POST /users/bookings/:id/place   (until payment gateway)
-My Bookings → GET /users/bookings?tab=current|past
+Pay → POST /users/bookings/:id/payment-order
+  → Razorpay Checkout (keyId, orderId, amount in paise)
+  → POST /users/bookings/:id/payment-verify { razorpayOrderId, razorpayPaymentId, razorpaySignature }
+  → if verify never returns, GET /users/bookings/:id (webhook may already have confirmed)
+My Bookings → GET /users/bookings?tab=current
+Past Bookings → GET /users/bookings?tab=past
+All Bookings → GET /users/bookings?tab=all   (created checkouts live here, not in the cart)
 Order Details → GET /users/bookings/:id
+  shiftValidation.mode supervisors → OTP each supervisor row
+  shiftValidation.mode waiters → OTP each waiter row
+  shiftValidation.mode bouncers → OTP each bouncer row
+  any mode: also OTP each bouncer row when the order includes bouncers
+  OTP button → POST /users/bookings/:id/assignments/:assignmentId/otp
 Cancel → POST /users/bookings/:id/cancel
 Review → POST /users/bookings/:id/review
 Logout → POST /auth/logout
@@ -1413,19 +1682,24 @@ Delete Account → DELETE /users/me
 - [ ] Persist `accessToken` + `refreshToken`; attach Bearer on all `/users/*`, `/crew/*`, and `/auth/devices` / `/auth/me`
 - [ ] Refresh on 401, then retry
 - [ ] After login, register `mid` + `pnid`
-- [ ] User app: route `isNew` / `!profileComplete` to Create Account; missing `defaultAddress` to Location
+- [ ] User Home quotes: `GET /users/home/reviews` (five-star written reviews only; `fullName` and `profilePhotoUrl`, no job title)
 - [ ] Google users: if `phoneVerified === false`, verify a real phone via OTP before treating the number as set
 - [ ] Crew app: gate Home on `verificationStatus === "approved"`
 - [ ] Treat `409 PROFILE_LOCKED` as “use Request Changes”
 - [ ] Document images and profile photo: `POST /uploads` then save the returned `url` on the profile
+- [ ] Crew emergency contacts: `GET /crew/me/emergency-contacts`. Photo via `POST /uploads` (`purpose=emergency_contact_photo`) then `photoUrl` on create/update. Phone is digits with an optional `+`, max 15 characters
+- [ ] Crew complaints: load reasons and orders first (`GET /crew/complaints/reasons`, `GET /crew/complaints/orders`). Submit with `bookingId` from the picker. Images use `purpose=complaint_image`
 - [ ] For emulator, point `PUBLIC_BASE_URL` at `http://10.0.2.2:4000` so image URLs load
 - [ ] Do not display full Aadhaar / account number (API will not return them)
-- [ ] Booking cart is a single `pending_payment` draft; `PUT /users/bookings/summary` both creates and edits it
+- [ ] Booking cart is a single `cart` draft with no payment; `PUT /users/bookings/summary` creates and replaces only that draft. A `created` checkout is listed with `GET /users/bookings?tab=all`
 - [ ] Venue picker: `GET /users/places/search?q=` then copy `name` / `address` / `latitude` / `longitude` into summary. Warn if `inServiceArea` is false
-- [ ] `POST /users/bookings/:id/place` is the stand-in until the payment gateway exists
+- [ ] Pay with `POST /users/bookings/:id/payment-order`, open Razorpay Checkout using `keyId` / `orderId` / `amount` (paise), then `POST /users/bookings/:id/payment-verify`. Do not ship the Razorpay key secret in the app. Do not start checkout again while `paymentStatus` is `initiated` or `processing`. If verify never returns, read All Bookings or the booking detail — the webhook may already have confirmed it
 - [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.
 - [ ] Crew job `id` is the integer booking id; `orderId` / `bookingReference` is the human code on the header
-- [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. Shift OTP is the organizer’s 4-digit `shiftOtp`, not the login OTP
+- [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. The shift code is per person, not the login OTP and not a booking-wide `shiftOtp`
+- [ ] Organizer Order Details: render `shiftValidation.rows`. Supervisors when `mode` is `supervisors`, waiters when `mode` is `waiters`, bouncers when `mode` is `bouncers`. Also render bouncer rows on a supervisors or waiters table when the order includes bouncers. OTP button calls `POST /users/bookings/:id/assignments/:assignmentId/otp` and shows the returned `otp`. A bouncer does not validate other crew
+- [ ] Crew Start Shift: open the code screen only when `actions.canStartShift` is true. There is no resend from the crew app
+- [ ] Supervisor Order Details: waiter table is `team`. Issue codes with `POST /crew/bookings/:id/team/:assignmentId/otp` only when `team.canValidate` is true
 - [ ] Drive Accept / Reject / Start / Complete buttons from `actions` on `GET /crew/bookings/:id`
 
 Questions: backend owner (Pavanesh), `CREW_CONNECT_API`.

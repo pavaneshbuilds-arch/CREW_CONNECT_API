@@ -77,6 +77,15 @@ const config = {
     placesApiKey: get('GOOGLE_PLACES_API_KEY', { fallback: undefined }),
   },
 
+  // Razorpay Standard Checkout. keyId is public (returned to the organizer app).
+  // keySecret stays on the server and is never included in a response.
+  razorpay: {
+    keyId: get('RAZORPAY_KEY_ID', { fallback: undefined }),
+    keySecret: get('RAZORPAY_KEY_SECRET', { fallback: undefined }),
+    // Set in the Razorpay dashboard when the webhook is created. Not the key secret.
+    webhookSecret: get('RAZORPAY_WEBHOOK_SECRET', { fallback: undefined }),
+  },
+
   // 32-byte key (hex or base64) used for AES-256-GCM encryption of sensitive
   // at-rest fields (Aadhaar, PAN, bank account numbers).
   encryptionKey: get('ENCRYPTION_KEY', { fallback: undefined }),

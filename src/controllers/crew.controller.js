@@ -1,6 +1,6 @@
 import catchAsync from '../utils/catchAsync.js';
 import { success, created } from '../utils/apiResponse.js';
-import { crewService } from '../services/index.js';
+import { crewService, crewComplaintService } from '../services/index.js';
 
 class CrewController {
   getProfile = catchAsync(async (req, res) => {
@@ -43,6 +43,26 @@ class CrewController {
     return success(res, null, { message: 'Time off removed' });
   });
 
+  listEmergencyContacts = catchAsync(async (req, res) => {
+    const data = await crewService.listEmergencyContacts(req.auth.sub);
+    return success(res, data);
+  });
+
+  createEmergencyContact = catchAsync(async (req, res) => {
+    const data = await crewService.createEmergencyContact(req.auth.sub, req.body);
+    return created(res, data, { message: 'Emergency contact saved' });
+  });
+
+  updateEmergencyContact = catchAsync(async (req, res) => {
+    const data = await crewService.updateEmergencyContact(req.auth.sub, req.params.id, req.body);
+    return success(res, data, { message: 'Emergency contact updated' });
+  });
+
+  deleteEmergencyContact = catchAsync(async (req, res) => {
+    await crewService.deleteEmergencyContact(req.auth.sub, req.params.id);
+    return success(res, null, { message: 'Emergency contact removed' });
+  });
+
   setOnline = catchAsync(async (req, res) => {
     const data = await crewService.setOnline(req.auth.sub, req.body);
     return success(res, data, { message: data.isOnline ? 'You are online' : 'You are offline' });
@@ -56,6 +76,25 @@ class CrewController {
   createEditRequest = catchAsync(async (req, res) => {
     const data = await crewService.createEditRequest(req.auth.sub, req.body.changedFields);
     return created(res, data, { message: 'Change request submitted for review' });
+  });
+
+  listComplaintReasons = catchAsync(async (req, res) => {
+    return success(res, crewComplaintService.listReasons());
+  });
+
+  listComplaintOrders = catchAsync(async (req, res) => {
+    const data = await crewComplaintService.listOrders(req.auth.sub);
+    return success(res, data);
+  });
+
+  createComplaint = catchAsync(async (req, res) => {
+    const data = await crewComplaintService.create(req.auth.sub, req.body);
+    return created(res, data, { message: 'Complaint submitted' });
+  });
+
+  listComplaints = catchAsync(async (req, res) => {
+    const data = await crewComplaintService.list(req.auth.sub);
+    return success(res, data);
   });
 
   listEditRequests = catchAsync(async (req, res) => {

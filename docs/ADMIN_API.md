@@ -225,7 +225,7 @@ Admin CRUD for offers shown on `GET /users/coupons` and applied on a cart via `P
 | `discountValue` | ₹ amount, or 0–100 for percentage |
 | `minSpend` | Optional minimum subtotal |
 | `maxDiscountAmount` | Optional cap (percentage “upto ₹X”; also caps a flat discount if set) |
-| `maxUses` | Optional global redemption limit. `null` = unlimited. Counted on **placed** bookings (`status` ≠ `pending_payment`), including later cancellations |
+| `maxUses` | Optional global redemption limit. `null` = unlimited. Counted on **placed** bookings (`status` is not `cart` or `created`), including later cancellations |
 | `maxUsesPerUser` | Optional per-organizer limit. `1` = one-time use per user |
 | `usedCount` | How many placed bookings have redeemed this code |
 
