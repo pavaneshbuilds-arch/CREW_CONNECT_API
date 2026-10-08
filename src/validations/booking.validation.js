@@ -68,6 +68,15 @@ export const applyCoupon = {
 
 export const bookingParam = idParam;
 
+export const verifyPayment = {
+  ...idParam,
+  body: Joi.object({
+    razorpayOrderId: Joi.string().trim().max(50).required(),
+    razorpayPaymentId: Joi.string().trim().max(50).required(),
+    razorpaySignature: Joi.string().trim().max(128).required(),
+  }),
+};
+
 export const issueShiftOtp = {
   params: Joi.object({
     id: Joi.number().integer().positive().required(),
@@ -78,7 +87,7 @@ export const issueShiftOtp = {
 export const listBookings = {
   query: Joi.object({
     ...pagination,
-    tab: Joi.string().valid('current', 'past').default('current'),
+    tab: Joi.string().valid('current', 'past', 'all').default('current'),
     latitude: Joi.number().min(-90).max(90),
     longitude: Joi.number().min(-180).max(180),
   }).and('latitude', 'longitude'),

@@ -29,6 +29,18 @@ class CrewRoutes {
     this.router.post('/me/time-off', validate(schema.addTimeOff), crewController.addTimeOff);
     this.router.delete('/me/time-off/:id', validate(schema.timeOffParam), crewController.deleteTimeOff);
 
+    // --- Emergency contacts ---
+    this.router.get('/me/emergency-contacts', crewController.listEmergencyContacts);
+    this.router.post('/me/emergency-contacts', validate(schema.createEmergencyContact), crewController.createEmergencyContact);
+    this.router.patch('/me/emergency-contacts/:id', validate(schema.updateEmergencyContact), crewController.updateEmergencyContact);
+    this.router.delete('/me/emergency-contacts/:id', validate(schema.emergencyContactParam), crewController.deleteEmergencyContact);
+
+    // --- Complaints against an order ---
+    this.router.get('/complaints/reasons', crewController.listComplaintReasons);
+    this.router.get('/complaints/orders', crewController.listComplaintOrders);
+    this.router.get('/complaints', crewController.listComplaints);
+    this.router.post('/complaints', validate(schema.createComplaint), crewController.createComplaint);
+
     // --- Online/offline toggle ---
     this.router.patch('/me/online', validate(schema.setOnline), crewController.setOnline);
 

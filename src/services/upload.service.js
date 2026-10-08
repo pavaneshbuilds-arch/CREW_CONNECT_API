@@ -4,7 +4,15 @@ import config from '../config/env.js';
 import ApiError from '../utils/apiError.js';
 import { uploadsRoot } from '../middlewares/upload.js';
 
-const PURPOSES = new Set(['profile_photo', 'aadhaar_front', 'aadhaar_back', 'pan_card', 'other']);
+const PURPOSES = new Set([
+  'profile_photo',
+  'aadhaar_front',
+  'aadhaar_back',
+  'pan_card',
+  'emergency_contact_photo',
+  'complaint_image',
+  'other',
+]);
 
 class UploadService {
   async save({ subjectType, subjectId, purpose, file }) {

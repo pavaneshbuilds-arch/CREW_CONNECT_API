@@ -4,6 +4,7 @@ import userRoutes from './user.routes.js';
 import crewRoutes from './crew.routes.js';
 import uploadRoutes from './upload.routes.js';
 import adminRoutes from './admin.routes.js';
+import paymentRoutes from './payment.routes.js';
 
 /**
  * Assembles the versioned API router and mounts each domain's routes. This is
@@ -25,6 +26,7 @@ class ApiRouter {
     this.router.use('/crew', crewRoutes);
     this.router.use('/uploads', uploadRoutes);
     this.router.use('/admin', adminRoutes);
+    this.router.use('/payments', paymentRoutes);
   }
 }
 

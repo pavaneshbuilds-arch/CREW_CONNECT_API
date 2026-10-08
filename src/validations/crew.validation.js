@@ -59,6 +59,56 @@ export const timeOffParam = {
   params: Joi.object({ id: Joi.number().integer().positive().required() }),
 };
 
+const emergencyPhone = Joi.string()
+  .pattern(/^\+?[0-9]{8,15}$/)
+  .max(15)
+  .messages({
+    'string.pattern.base': 'phoneNumber must be 8–15 digits, optionally prefixed with +',
+    'string.max': 'phoneNumber must be at most 15 characters',
+  });
+
+const emergencyPhoto = Joi.string().uri().max(2048).allow(null, '');
+
+export const createEmergencyContact = {
+  body: Joi.object({
+    fullName: Joi.string().trim().max(150).required(),
+    phoneNumber: emergencyPhone.required(),
+    relationship: Joi.string().trim().max(50).required(),
+    photoUrl: emergencyPhoto,
+  }),
+};
+
+export const updateEmergencyContact = {
+  params: Joi.object({ id: Joi.number().integer().positive().required() }),
+  body: Joi.object({
+    fullName: Joi.string().trim().max(150),
+    phoneNumber: emergencyPhone,
+    relationship: Joi.string().trim().max(50),
+    photoUrl: emergencyPhoto,
+  }).min(1),
+};
+
+export const emergencyContactParam = {
+  params: Joi.object({ id: Joi.number().integer().positive().required() }),
+};
+
+const complaintReason = Joi.string().valid(
+  'customer_not_available',
+  'payment_issue',
+  'safety_concern',
+  'venue_problem',
+  'other'
+);
+
+export const createComplaint = {
+  body: Joi.object({
+    bookingId: Joi.number().integer().positive().required(),
+    reason: complaintReason.required(),
+    details: Joi.string().trim().min(1).max(2000).required(),
+    imageUrls: Joi.array().items(Joi.string().uri().max(2048)).max(5),
+  }),
+};
+
 export const setOnline = {
   body: Joi.object({
     isOnline: Joi.boolean().required(),

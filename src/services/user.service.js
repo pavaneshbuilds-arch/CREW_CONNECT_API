@@ -255,6 +255,42 @@ class UserService {
       whatsapp: config.support.whatsapp,
     };
   }
+
+  async listHomeReviews(query) {
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const where = {
+      rating: 5,
+      reviewText: { not: '' },
+      user: { deletedAt: null, isActive: true },
+    };
+    const [total, rows] = await prisma.$transaction([
+      prisma.review.count({ where }),
+      prisma.review.findMany({
+        where,
+        include: { user: { select: { fullName: true, profilePhotoUrl: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        rating: row.rating,
+        reviewText: row.reviewText,
+        fullName: row.user.fullName,
+        profilePhotoUrl: row.user.profilePhotoUrl,
+        createdAt: row.createdAt,
+      })),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
+  }
 }
 
 export default new UserService();

@@ -32,8 +32,13 @@ class BookingController {
     return success(res, data, { message: 'Coupon removed' });
   });
 
-  place = catchAsync(async (req, res) => {
-    const data = await bookingService.place(req.auth.sub, Number(req.params.id));
+  createPaymentOrder = catchAsync(async (req, res) => {
+    const data = await bookingService.createPaymentOrder(req.auth.sub, Number(req.params.id));
+    return success(res, data, { message: 'Payment order created' });
+  });
+
+  verifyPayment = catchAsync(async (req, res) => {
+    const data = await bookingService.verifyPayment(req.auth.sub, Number(req.params.id), req.body);
     return success(res, data, { message: 'Booking confirmed' });
   });
 
