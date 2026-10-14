@@ -703,12 +703,16 @@ async function allocateBookingReference() {
 }
 
 async function quoteFromCounts(crewCounts, coupon) {
-  const rates = await rateCardService.getRates();
+  const cards = await rateCardService.getCards();
+  const rates = Object.fromEntries(CREW_ROLES.map((role) => [role, cards[role].rate]));
+  const crewSharePercents = Object.fromEntries(
+    CREW_ROLES.map((role) => [role, cards[role].crewSharePercent])
+  );
   const lineItems = buildLineItems({ crewCounts, rates });
   if (!lineItems.length) {
     throw ApiError.badRequest('Select at least one crew member', { code: 'CREW_REQUIRED' });
   }
-  return { rates, lineItems, ...computeTotals(lineItems, coupon) };
+  return { rates, crewSharePercents, lineItems, ...computeTotals(lineItems, coupon) };
 }
 
 function quoteFromBooking(booking, coupon) {
@@ -835,14 +839,20 @@ async function settleCapturedPayment(userId, booking, payment, razorpayPaymentId
   }
 }
 
-async function persistRequirements(tx, bookingId, crewCounts, rates) {
+async function persistRequirements(tx, bookingId, crewCounts, rates, crewSharePercents = {}) {
   await tx.bookingCrewRequirement.deleteMany({ where: { bookingId } });
-  const rows = CREW_ROLES.filter((role) => crewCounts[role] > 0).map((role) => ({
-    bookingId,
-    role,
-    countRequired: crewCounts[role],
-    rate: rates[role],
-  }));
+  const rows = CREW_ROLES.filter((role) => crewCounts[role] > 0).map((role) => {
+    const rate = Number(rates[role]);
+    const crewSharePercent = Number(crewSharePercents[role] ?? 100);
+    return {
+      bookingId,
+      role,
+      countRequired: crewCounts[role],
+      rate,
+      crewSharePercent,
+      crewAmount: roundMoney((rate * crewSharePercent) / 100),
+    };
+  });
   if (rows.length) await tx.bookingCrewRequirement.createMany({ data: rows });
 }
 
@@ -973,7 +983,7 @@ class BookingService {
         });
       }
 
-      await persistRequirements(tx, booking.id, crewCounts, totals.rates);
+      await persistRequirements(tx, booking.id, crewCounts, totals.rates, totals.crewSharePercents);
       return { id: booking.id, created };
     });
 

@@ -700,7 +700,7 @@ Pricing is computed on the server (do not send rates or totals):
 
 `expectedDurationHours` is an input (1–24). It is stored and shown to crew on the order; it does not change the price. `GET /users/bookings/options` still returns `durations` as optional UI shortcuts (6 / 8 / 12).
 
-Fixed rates come from the admin rate card (`GET /admin/rates`). Defaults after seed: waiter **₹800**, supervisor **₹1000**, bouncer **₹900** per person per event. Rates are snapshotted onto the booking at quote time, so later admin edits do not change existing bookings.
+Fixed rates come from the admin rate card (`GET /admin/rates`). Defaults after seed: waiter **₹800**, supervisor **₹1000**, bouncer **₹900** per person per event. Rates are snapshotted onto the booking at quote time, so later admin edits do not change existing bookings. The crew share of each rate is stored on the booking at the same time and is not returned on organizer responses.
 
 Cancellation: allowed while `confirmed` or `crew_assigned`. Within **24 hours** of event start → **50% fee** (50% refund). Otherwise **0% fee**.
 
@@ -1321,7 +1321,9 @@ A complaint is filed against one order this crew member has accepted. Open job r
 
 All routes: Bearer + token `type` must be `"crew"`. Profile must be **approved** (`403 NOT_APPROVED` otherwise).
 
-After an organizer confirms a booking (`POST /users/bookings/:id/payment-verify`), it is broadcast to **approved** crew whose `primaryRole` still has an open slot. Pay is **this crew member’s** fixed event rate from the admin rate card (snapshotted on the booking), not hours × rate and not the organizer’s `estimatedTotal`. Hours are shown on the order for the shift length only.
+After an organizer confirms a booking (`POST /users/bookings/:id/payment-verify`), it is broadcast to **approved** crew whose `primaryRole` still has an open slot. Pay is the **per-person crew amount stored on the booking** when it was quoted (`crewAmount` = organizer rate × crew share percent). It is not hours × rate, not the organizer’s price, and not the organizer’s `estimatedTotal`. A later change to the admin percentage does not change this amount. Hours are shown on the order for the shift length only.
+
+Example below: waiter organizer price ₹800 at 70% is stored as ₹560, so every crew pay field is 560.
 
 Crew-facing `status` values: `new_request` → `accepted` → `in_progress` → `completed` (or `cancelled`).
 
@@ -1363,12 +1365,12 @@ Optional query: `latitude` + `longitude` together (otherwise stored location fro
         "staffNeededLabel": "20 Staff",
         "roleStaffLabel": "20 Waiters",
         "distanceKm": 3.5,
-        "estimatedEarnings": 800,
+        "estimatedEarnings": 560,
         "pay": {
-          "rate": 800,
+          "rate": 560,
           "hours": 6,
-          "basePay": 800,
-          "total": 800
+          "basePay": 560,
+          "total": 560
         }
       }
     ],
@@ -1404,7 +1406,7 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
     "orderId": "PC-12345",
     "status": "new_request",
     "requestStatusLabel": "NEW REQUEST",
-    "estimatedEarnings": 800,
+    "estimatedEarnings": 560,
     "briefingInstructions": "Please ensure you are at the designated briefing area before starting.",
     "venue": {
       "name": "Taj Convention Center",
@@ -1427,10 +1429,10 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
       { "title": "Clean-shaven appearance", "description": "Groomed hair and professional demeanor." }
     ],
     "payment": {
-      "rate": 800,
+      "rate": 560,
       "hours": 6,
-      "basePay": 800,
-      "total": 800
+      "basePay": 560,
+      "total": 560
     },
     "assignedCrew": [],
     "team": null,
@@ -1471,7 +1473,7 @@ Drive the footer from `actions`. `shift.otpIssued` becomes true once a code has 
 
 After verify, poll this endpoint for the timer (`elapsedSeconds` / `remainingSeconds` / `progressPercent`); prefer a client timer from `shift.startedAt` + `expectedDurationSeconds`, using `serverNow` to sync.
 
-On **completed**, `payout` and `performance` are filled (rating comes from the organizer’s review when present).
+On **completed**, `payout` and `performance` are filled (rating comes from the organizer’s review when present). `payout.total` and `payout.baseEarnings` are the same stored crew amount shown while picking the job.
 
 **404 `BOOKING_NOT_FOUND`** if it is not an open job for this crew’s role and they have no assignment on it.
 
@@ -1513,7 +1515,7 @@ Generates a new 4-digit code (replaces an unused one), SMS-stubs it to that wait
 
 ### `POST /crew/bookings/:id/complete`
 
-Marks this crew’s shift complete and records earnings. When every assigned crew has finished, the booking becomes `completed`. Response is the Shift Completed payload (`payout`, `performance`).
+Marks this crew’s shift complete and records the stored crew amount as earnings. When every assigned crew has finished, the booking becomes `completed`. Response is the Shift Completed payload (`payout`, `performance`).
 
 **409 `SHIFT_NOT_COMPLETABLE`** if the shift has not been started.
 
@@ -1696,6 +1698,7 @@ Delete Account → DELETE /users/me
 - [ ] Pay with `POST /users/bookings/:id/payment-order`, open Razorpay Checkout using `keyId` / `orderId` / `amount` (paise), then `POST /users/bookings/:id/payment-verify`. Do not ship the Razorpay key secret in the app. Do not start checkout again while `paymentStatus` is `initiated` or `processing`. If verify never returns, read All Bookings or the booking detail — the webhook may already have confirmed it
 - [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.
 - [ ] Crew job `id` is the integer booking id; `orderId` / `bookingReference` is the human code on the header
+- [ ] Crew pay (`estimatedEarnings`, `pay`, and completed `payout`) is the amount stored on that booking for this crew member. Later admin percentage changes do not change it. Do not treat it as the organizer’s price
 - [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. The shift code is per person, not the login OTP and not a booking-wide `shiftOtp`
 - [ ] Organizer Order Details: render `shiftValidation.rows`. Supervisors when `mode` is `supervisors`, waiters when `mode` is `waiters`, bouncers when `mode` is `bouncers`. Also render bouncer rows on a supervisors or waiters table when the order includes bouncers. OTP button calls `POST /users/bookings/:id/assignments/:assignmentId/otp` and shows the returned `otp`. A bouncer does not validate other crew
 - [ ] Crew Start Shift: open the code screen only when `actions.canStartShift` is true. There is no resend from the crew app

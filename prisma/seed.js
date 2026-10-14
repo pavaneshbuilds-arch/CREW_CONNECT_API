@@ -60,9 +60,9 @@ async function main() {
   console.log(`Seeded coupon: ${percentCoupon.code}`);
 
   const defaultRates = [
-    { role: 'waiter', rate: 800 },
-    { role: 'supervisor', rate: 1000 },
-    { role: 'bouncer', rate: 900 },
+    { role: 'waiter', rate: 800, crewSharePercent: 100 },
+    { role: 'supervisor', rate: 1000, crewSharePercent: 100 },
+    { role: 'bouncer', rate: 900, crewSharePercent: 100 },
   ];
   for (const row of defaultRates) {
     await prisma.crewRateCard.upsert({

@@ -211,10 +211,11 @@ function distanceKm(booking, coords) {
 function payForRole(booking, role) {
   const requirement = requirementForRole(booking, role);
   const hours = decimal(booking.expectedDurationHours) || 0;
+  const storedAmount = decimal(requirement?.crewAmount);
   const rate = decimal(requirement?.rate) || 0;
-  const total = roundMoney(rate);
+  const total = roundMoney(storedAmount != null ? storedAmount : rate);
   return {
-    rate,
+    rate: total,
     hours,
     basePay: total,
     total,

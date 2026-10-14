@@ -152,16 +152,24 @@ export const updateAdmin = {
 };
 
 const rateValue = Joi.number().min(1).max(100000).precision(2);
+const crewSharePercentValue = Joi.number().min(0).max(100).precision(2);
 
 export const updateRates = {
   body: Joi.object({
     waiter: rateValue,
     supervisor: rateValue,
     bouncer: rateValue,
+    crewSharePercent: Joi.object({
+      waiter: crewSharePercentValue,
+      supervisor: crewSharePercentValue,
+      bouncer: crewSharePercentValue,
+    }).min(1),
     note: Joi.string().max(500).allow('', null),
   })
-    .or('waiter', 'supervisor', 'bouncer')
-    .messages({ 'object.missing': 'Provide at least one of waiter, supervisor, bouncer' }),
+    .or('waiter', 'supervisor', 'bouncer', 'crewSharePercent')
+    .messages({
+      'object.missing': 'Provide at least one of waiter, supervisor, bouncer, or crewSharePercent',
+    }),
 };
 
 export const listRateLogs = {

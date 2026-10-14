@@ -1,5 +1,5 @@
 import { prisma } from '../config/prisma.js';
-import { CREW_ROLES, DEFAULT_RATES, getGstPercent } from '../config/pricing.js';
+import { CREW_ROLES, DEFAULT_CREW_SHARE_PERCENT, DEFAULT_RATES, getGstPercent } from '../config/pricing.js';
 import ApiError from '../utils/apiError.js';
 import { activityLogService } from './index.js';
 
@@ -28,16 +28,29 @@ function serializeAdmin(admin) {
 
 class RateCardService {
   /**
-   * Current fixed event rates for quoting. Missing roles fall back to defaults so
-   * bookings still work before seed/migration has run.
+   * Current fixed event rates and crew share percents. Missing roles fall back
+   * to defaults so bookings still work before seed/migration has run.
    */
-  async getRates() {
+  async getCards() {
     const rows = await prisma.crewRateCard.findMany();
-    const rates = { ...DEFAULT_RATES };
+    const cards = Object.fromEntries(
+      CREW_ROLES.map((role) => [
+        role,
+        { rate: DEFAULT_RATES[role], crewSharePercent: DEFAULT_CREW_SHARE_PERCENT },
+      ])
+    );
     for (const row of rows) {
-      rates[row.role] = Number(row.rate);
+      cards[row.role] = {
+        rate: Number(row.rate),
+        crewSharePercent: Number(row.crewSharePercent),
+      };
     }
-    return rates;
+    return cards;
+  }
+
+  async getRates() {
+    const cards = await this.getCards();
+    return Object.fromEntries(CREW_ROLES.map((role) => [role, cards[role].rate]));
   }
 
   async listCurrent() {
@@ -51,6 +64,7 @@ class RateCardService {
         return {
           role,
           rate: DEFAULT_RATES[role],
+          crewSharePercent: DEFAULT_CREW_SHARE_PERCENT,
           updatedAt: null,
           updatedBy: null,
         };
@@ -59,6 +73,7 @@ class RateCardService {
         id: row.id,
         role: row.role,
         rate: decimal(row.rate),
+        crewSharePercent: decimal(row.crewSharePercent),
         updatedAt: row.updatedAt,
         updatedBy: serializeAdmin(row.updatedBy),
       };
@@ -66,50 +81,73 @@ class RateCardService {
 
     return {
       rates: Object.fromEntries(items.map((item) => [item.role, item.rate])),
+      crewSharePercents: Object.fromEntries(items.map((item) => [item.role, item.crewSharePercent])),
       gstPercent: getGstPercent(),
       items,
     };
   }
 
   async updateRates(adminId, body) {
-    const updates = CREW_ROLES.filter((role) => body[role] != null).map((role) => ({
+    const percents = body.crewSharePercent || {};
+    const updates = CREW_ROLES.filter((role) => body[role] != null || percents[role] != null).map((role) => ({
       role,
-      rate: Number(body[role]),
+      rate: body[role] != null ? Number(body[role]) : null,
+      crewSharePercent: percents[role] != null ? Number(percents[role]) : null,
     }));
     if (!updates.length) {
-      throw ApiError.badRequest('Provide at least one rate to update', { code: 'RATE_REQUIRED' });
+      throw ApiError.badRequest('Provide at least one rate or crew share percent to update', {
+        code: 'RATE_REQUIRED',
+      });
     }
 
     const note = body.note ? String(body.note).trim() || null : null;
     const changes = [];
 
     await prisma.$transaction(async (tx) => {
-      for (const { role, rate } of updates) {
+      for (const { role, rate, crewSharePercent } of updates) {
         const existing = await tx.crewRateCard.findUnique({ where: { role } });
-        const previous = existing ? Number(existing.rate) : DEFAULT_RATES[role];
-        if (previous === rate && existing) continue;
+        const previousRate = existing ? Number(existing.rate) : DEFAULT_RATES[role];
+        const previousPercent = existing
+          ? Number(existing.crewSharePercent)
+          : DEFAULT_CREW_SHARE_PERCENT;
+        const nextRate = rate != null ? rate : previousRate;
+        const nextPercent = crewSharePercent != null ? crewSharePercent : previousPercent;
+        if (existing && previousRate === nextRate && previousPercent === nextPercent) continue;
 
         const card = existing
           ? await tx.crewRateCard.update({
               where: { role },
-              data: { rate, updatedByAdminId: adminId },
+              data: { rate: nextRate, crewSharePercent: nextPercent, updatedByAdminId: adminId },
             })
           : await tx.crewRateCard.create({
-              data: { role, rate, updatedByAdminId: adminId },
+              data: {
+                role,
+                rate: nextRate,
+                crewSharePercent: nextPercent,
+                updatedByAdminId: adminId,
+              },
             });
 
         await tx.crewRateLog.create({
           data: {
             rateCardId: card.id,
             role,
-            previousRate: previous,
-            newRate: rate,
+            previousRate,
+            newRate: nextRate,
+            previousCrewSharePercent: previousPercent,
+            newCrewSharePercent: nextPercent,
             changedByAdminId: adminId,
             note,
           },
         });
 
-        changes.push({ role, previousRate: previous, newRate: rate });
+        changes.push({
+          role,
+          previousRate,
+          newRate: nextRate,
+          previousCrewSharePercent: previousPercent,
+          newCrewSharePercent: nextPercent,
+        });
       }
 
       if (changes.length) {
@@ -161,6 +199,8 @@ class RateCardService {
         role: row.role,
         previousRate: decimal(row.previousRate),
         newRate: decimal(row.newRate),
+        previousCrewSharePercent: decimal(row.previousCrewSharePercent),
+        newCrewSharePercent: decimal(row.newCrewSharePercent),
         note: row.note,
         createdAt: row.createdAt,
         changedBy: serializeAdmin(row.changedBy),

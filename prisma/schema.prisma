@@ -457,13 +457,15 @@ model Booking {
 }
 
 model BookingCrewRequirement {
-  id            Int      @id @default(autoincrement())
-  bookingId     Int      @map("booking_id")
-  role          CrewRole
-  countRequired Int      @map("count_required")
-  rate          Decimal  @map("rate_per_hour") @db.Decimal(10, 2)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               Int      @id @default(autoincrement())
+  bookingId        Int      @map("booking_id")
+  role             CrewRole
+  countRequired    Int      @map("count_required")
+  rate             Decimal  @map("rate_per_hour") @db.Decimal(10, 2)
+  crewSharePercent Decimal  @default(100) @map("crew_share_percent") @db.Decimal(5, 2)
+  crewAmount       Decimal  @map("crew_amount") @db.Decimal(10, 2)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
@@ -677,6 +679,7 @@ model CrewRateCard {
   id               Int      @id @default(autoincrement())
   role             CrewRole @unique
   rate             Decimal  @map("rate_per_hour") @db.Decimal(10, 2)
+  crewSharePercent Decimal  @default(100) @map("crew_share_percent") @db.Decimal(5, 2)
   updatedByAdminId Int?     @map("updated_by_admin_id")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -688,14 +691,16 @@ model CrewRateCard {
 }
 
 model CrewRateLog {
-  id               Int      @id @default(autoincrement())
-  rateCardId       Int      @map("rate_card_id")
-  role             CrewRole
-  previousRate     Decimal  @map("previous_rate") @db.Decimal(10, 2)
-  newRate          Decimal  @map("new_rate") @db.Decimal(10, 2)
-  changedByAdminId Int      @map("changed_by_admin_id")
-  note             String?
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                       Int      @id @default(autoincrement())
+  rateCardId               Int      @map("rate_card_id")
+  role                     CrewRole
+  previousRate             Decimal  @map("previous_rate") @db.Decimal(10, 2)
+  newRate                  Decimal  @map("new_rate") @db.Decimal(10, 2)
+  previousCrewSharePercent Decimal  @default(100) @map("previous_crew_share_percent") @db.Decimal(5, 2)
+  newCrewSharePercent      Decimal  @default(100) @map("new_crew_share_percent") @db.Decimal(5, 2)
+  changedByAdminId         Int      @map("changed_by_admin_id")
+  note                     String?
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   rateCard  CrewRateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade)
   changedBy Admin        @relation("CrewRateLogChangedBy", fields: [changedByAdminId], references: [id])

@@ -32,6 +32,8 @@ export const DEFAULT_RATES = {
   bouncer: 900,
 };
 
+export const DEFAULT_CREW_SHARE_PERCENT = 100;
+
 export const CREW_ROLES = ['waiter', 'supervisor', 'bouncer'];
 
 export const COVER_RATIO = 20;

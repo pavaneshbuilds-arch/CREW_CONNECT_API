@@ -809,12 +809,17 @@ class AdminService {
       crewRequirements: booking.crewRequirements.map((r) => {
         const rate = decimal(r.rate);
         const countRequired = r.countRequired;
+        const crewAmount = decimal(r.crewAmount);
+        const money = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
         return {
           id: r.id,
           role: r.role,
           countRequired,
           rate,
-          amount: rate == null ? null : Math.round((countRequired * rate + Number.EPSILON) * 100) / 100,
+          amount: rate == null ? null : money(countRequired * rate),
+          crewSharePercent: decimal(r.crewSharePercent),
+          crewAmount,
+          crewPayout: crewAmount == null ? null : money(countRequired * crewAmount),
         };
       }),
       assignments: booking.assignments.map((a) => ({
