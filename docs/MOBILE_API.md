@@ -244,15 +244,12 @@ Send a 4-digit OTP to the phone. Max **5 requests per minute**.
   "message": "OTP sent",
   "data": {
     "phoneNumber": "+919876543210",
-    "expiresInSeconds": 300,
-    "devOtp": "1846"
+    "expiresInSeconds": 300
   }
 }
 ```
 
-`devOtp` is **only in development**. Production will not include it — wait for SMS.
-
-When `MSG91_AUTH_KEY` and `MSG91_TEMPLATE_ID` are set, the code is sent by SMS: “Your verification code for Crew Connect is ####. Enter this code to verify your account. Do not share it with anyone.” **500 `SMS_SEND_FAILED`** if MSG91 rejects the send. **500 `SMS_NOT_CONFIGURED`** in production when those keys are missing. In development, with the keys unset, the code is logged on the server instead of sent.
+The code is never included in this response. Wait for the SMS: “Your verification code for Crew Connect is ####. Enter this code to verify your account. Do not share it with anyone.” **500 `SMS_SEND_FAILED`** if MSG91 rejects the send. **500 `SMS_NOT_CONFIGURED`** in production when `MSG91_AUTH_KEY` or `MSG91_TEMPLATE_ID` is missing. In development, with those keys unset, the code is logged on the server only.
 
 In **development**, crew login (`subjectType: "crew"`) also accepts **any 4-digit code** after a successful OTP request. User OTP is still checked. This bypass is off when `NODE_ENV=production`.
 

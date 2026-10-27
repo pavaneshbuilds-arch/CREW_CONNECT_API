@@ -45,10 +45,7 @@ class AuthService {
 
     await smsService.sendOtp(phoneNumber, code);
 
-    const response = { phoneNumber, expiresInSeconds: config.otp.ttlSeconds };
-    // Development-only convenience so the flow is testable without a live SMS gateway.
-    if (config.otp.devExpose && !config.isProduction) response.devOtp = code;
-    return response;
+    return { phoneNumber, expiresInSeconds: config.otp.ttlSeconds };
   }
 
   /**

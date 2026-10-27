@@ -68,9 +68,6 @@ const config = {
     length: getInt('OTP_LENGTH', { fallback: 4 }),
     ttlSeconds: getInt('OTP_TTL_SECONDS', { fallback: 300 }),
     maxAttempts: getInt('OTP_MAX_ATTEMPTS', { fallback: 5 }),
-    // When true, the generated OTP is returned in the API response and logged.
-    // Development convenience only — never enable in production.
-    devExpose: get('OTP_DEV_EXPOSE', { fallback: 'true' }) === 'true',
     // When true, crew login accepts any 4-digit code (still requires a prior
     // OTP request). Hard-gated off in production regardless of this flag.
     devAcceptAny: get('OTP_DEV_ACCEPT_ANY', { fallback: 'true' }) === 'true',
