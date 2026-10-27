@@ -59,6 +59,11 @@ const config = {
     issuer: get('JWT_ISSUER', { fallback: 'crew-connect-api' }),
   },
 
+  msg91: {
+    authKey: get('MSG91_AUTH_KEY', { fallback: undefined }),
+    templateId: get('MSG91_TEMPLATE_ID', { fallback: undefined }),
+  },
+
   otp: {
     length: getInt('OTP_LENGTH', { fallback: 4 }),
     ttlSeconds: getInt('OTP_TTL_SECONDS', { fallback: 300 }),

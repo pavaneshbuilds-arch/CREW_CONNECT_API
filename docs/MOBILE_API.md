@@ -58,7 +58,7 @@ Default port is `4000`. All JSON. Charset UTF-8.
 | 404 | `ROUTE_NOT_FOUND`, `CREW_NOT_FOUND`, `USER_NOT_FOUND`, `ADDRESS_NOT_FOUND`, `BOOKING_NOT_FOUND`, `ASSIGNMENT_NOT_FOUND` |
 | 409 | `PROFILE_LOCKED`, `ALREADY_APPROVED`, `NOT_APPROVED`, `UNIQUE_CONSTRAINT`, `PHONE_IN_USE`, `BOOKING_NOT_EDITABLE`, `BOOKING_NOT_CANCELLABLE`, `REVIEW_NOT_ALLOWED`, `REVIEW_ALREADY_EXISTS`, `JOB_NOT_AVAILABLE`, `JOB_FULL`, `JOB_ALREADY_ACCEPTED`, `JOB_ALREADY_REJECTED`, `DATE_BLOCKED`, `SHIFT_NOT_STARTABLE`, `SHIFT_NOT_COMPLETABLE`, `SHIFT_OTP_NOT_ISSUABLE`, `SHIFT_ALREADY_STARTED`, `SHIFT_NOT_VALIDATING`, `BOOKING_CANCELLED`, `CREW_SHORTAGE` |
 | 429 | `OTP_RATE_LIMITED`, `OTP_LOCKED`, `PLACES_RATE_LIMITED` |
-| 500 | `PLACES_NOT_CONFIGURED` (server has no `GOOGLE_PLACES_API_KEY`) |
+| 500 | `PLACES_NOT_CONFIGURED` (server has no `GOOGLE_PLACES_API_KEY`), `SMS_NOT_CONFIGURED` (production has no MSG91 keys), `SMS_SEND_FAILED` (MSG91 rejected the OTP SMS) |
 | 502 | `PLACES_UPSTREAM_ERROR` (Google Places timed out or rejected the request) |
 
 Validation errors include `details`: `[{ "path": "phoneNumber", "message": "…" }]`.
@@ -251,6 +251,8 @@ Send a 4-digit OTP to the phone. Max **5 requests per minute**.
 ```
 
 `devOtp` is **only in development**. Production will not include it — wait for SMS.
+
+When `MSG91_AUTH_KEY` and `MSG91_TEMPLATE_ID` are set, the code is sent by SMS: “Your verification code for Crew Connect is ####. Enter this code to verify your account. Do not share it with anyone.” **500 `SMS_SEND_FAILED`** if MSG91 rejects the send. **500 `SMS_NOT_CONFIGURED`** in production when those keys are missing. In development, with the keys unset, the code is logged on the server instead of sent.
 
 In **development**, crew login (`subjectType: "crew"`) also accepts **any 4-digit code** after a successful OTP request. User OTP is still checked. This bypass is off when `NODE_ENV=production`.
 
@@ -997,7 +999,7 @@ Each row: `assignmentId`, `crewId`, `fullName`, `profilePhotoUrl`, `role`, `stat
 
 ### `POST /users/bookings/:id/assignments/:assignmentId/otp`
 
-OTP button on a `shiftValidation` row. No body. Generates a new 4-digit code for that assignment (replaces an unused code), SMS-stubs it to **that crew member’s phone** (dev: logged to the server console), and returns the updated row including `otp` so the organizer can read it out.
+OTP button on a `shiftValidation` row. No body. Generates a new 4-digit code for that assignment (replaces an unused code), sends it by SMS to **that crew member’s phone** (same MSG91 path as login; in development with MSG91 unset, logged on the server), and returns the updated row including `otp` so the organizer can read it out. **500 `SMS_SEND_FAILED`** if the SMS provider rejects the send.
 
 The organizer can issue a code for any row in `shiftValidation.rows`: supervisors or waiters for `mode`, and bouncers whenever the booking includes them. A waiter on a supervisor booking is rejected.
 
@@ -1509,7 +1511,7 @@ Start Shift — verify the 4-digit venue code.
 
 Supervisor validates one assigned waiter. No body. Allowed only when this caller is a supervisor on the booking and their own shift is `in_progress`. `:assignmentId` must be a waiter whose `reportsTo` assignment is this supervisor.
 
-Generates a new 4-digit code (replaces an unused one), SMS-stubs it to that waiter’s phone (dev: logged to the server console), and returns the waiter row including `otp`.
+Generates a new 4-digit code (replaces an unused one), sends it by SMS to that waiter’s phone (same MSG91 path as login; in development with MSG91 unset, logged on the server), and returns the waiter row including `otp`. **500 `SMS_SEND_FAILED`** if the SMS provider rejects the send.
 
 **403 `SHIFT_OTP_NOT_ALLOWED`** if the caller is not a supervisor on this booking. **409 `SHIFT_NOT_VALIDATING`** if the supervisor’s shift has not started. **404 `ASSIGNMENT_NOT_FOUND`** if that waiter is not on this supervisor’s team. **409 `SHIFT_ALREADY_STARTED`** if the waiter’s shift has already started. **409 `BOOKING_CANCELLED`**.
 

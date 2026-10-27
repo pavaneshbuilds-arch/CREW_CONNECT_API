@@ -193,7 +193,7 @@ Error:
 ## Notes on v1 scope
 
 - **Phone OTP** is the primary auth for both mobile apps; **Google Sign-In** is user-app only.
-- **SMS is stubbed** in development (`src/services/sms.service.js` logs the OTP). Wire a real provider (MSG91/Twilio/Gupshup) before production.
+- **SMS** uses MSG91 when `MSG91_AUTH_KEY` and `MSG91_TEMPLATE_ID` are set. If they are empty and `NODE_ENV` is not production, the OTP is logged instead of sent.
 - **Crew OTP bypass** in development: after `POST /auth/otp/request`, any 4-digit code is accepted for `subjectType: "crew"`. Production always verifies the real OTP.
 - **Crew login** creates a minimal record on first OTP verify; onboarding + admin verification (`verification_status`) gate full access.
 - **User login** also find-or-creates the organizer on first OTP / Google success; `GET/PATCH /users/me` and addresses complete Create Account. There is no admin approval for users.
