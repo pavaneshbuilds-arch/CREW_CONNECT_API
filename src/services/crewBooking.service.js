@@ -614,6 +614,74 @@ async function listMine(crew, { tab, coords }) {
     );
 }
 
+function assignmentFiltersForStatuses(statuses) {
+  const filters = [];
+  const wantsAccepted = statuses.includes('accepted');
+  const wantsCancelled = statuses.includes('cancelled');
+  if (wantsAccepted && wantsCancelled) {
+    filters.push({ status: { in: UPCOMING_ASSIGNMENT_STATUSES } });
+  } else if (wantsAccepted) {
+    filters.push({
+      status: { in: UPCOMING_ASSIGNMENT_STATUSES },
+      booking: { status: { not: 'cancelled' } },
+    });
+  } else if (wantsCancelled) {
+    filters.push({
+      status: { in: UPCOMING_ASSIGNMENT_STATUSES },
+      booking: { status: 'cancelled' },
+    });
+  }
+  if (statuses.includes('in_progress')) {
+    filters.push({ status: 'in_progress', booking: { status: { not: 'cancelled' } } });
+  }
+  if (statuses.includes('completed')) {
+    filters.push({ status: 'completed' });
+  }
+  return filters;
+}
+
+async function listByStatuses(crew, { statuses, coords }) {
+  const wanted = [...new Set(statuses)];
+  const items = [];
+
+  if (wanted.includes('new_request')) {
+    items.push(...(await listOpenRequests(crew, { coords })));
+  }
+
+  const assignmentFilters = assignmentFiltersForStatuses(wanted);
+  if (assignmentFilters.length) {
+    const onlyCompleted = wanted.length === 1 && wanted[0] === 'completed';
+    const rows = await prisma.eventCrewAssignment.findMany({
+      where: { crewId: crew.id, OR: assignmentFilters },
+      include: { booking: { include: CREW_JOB_INCLUDE } },
+      orderBy: onlyCompleted ? { shiftCompletedAt: 'desc' } : { createdAt: 'desc' },
+    });
+    items.push(
+      ...rows
+        .filter((row) => row.booking)
+        .map((row) => serializeListItem(row.booking, { role: row.role, coords, assignment: row }))
+    );
+  }
+
+  if (wanted.length === 1 && (wanted[0] === 'new_request' || wanted[0] === 'completed')) {
+    return items;
+  }
+
+  const seen = new Set();
+  const unique = [];
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    unique.push(item);
+  }
+  unique.sort((a, b) => {
+    const date = String(a.eventDate || '').localeCompare(String(b.eventDate || ''));
+    if (date) return date;
+    return String(a.eventStartTime || '').localeCompare(String(b.eventStartTime || ''));
+  });
+  return unique;
+}
+
 async function todayStats(crewId) {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
@@ -685,9 +753,12 @@ class CrewBookingService {
     const page = query.page || 1;
     const limit = query.limit || 20;
     const tab = query.tab || 'requests';
+    const statuses = Array.isArray(query.status) ? query.status : [];
 
     let items;
-    if (tab === 'requests') {
+    if (statuses.length) {
+      items = await listByStatuses(crew, { statuses, coords });
+    } else if (tab === 'requests') {
       items = await listOpenRequests(crew, { coords });
     } else {
       items = await listMine(crew, { tab, coords });

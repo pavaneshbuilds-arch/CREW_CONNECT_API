@@ -1395,13 +1395,14 @@ Paginated list. Query:
 
 | Param | Notes |
 |---|---|
-| `tab` | `requests` (default, Home feed), `upcoming` (accepted, not started, including a booking cancelled after accept), `active` (in progress), `completed` |
+| `tab` | Used when `status` is omitted. `requests` (default, Home feed), `upcoming` (accepted, not started, including a booking cancelled after accept), `active` (in progress), `completed` |
+| `status` | Repeat the query key, or send a comma-separated list. Crew-facing values: `new_request`, `accepted`, `in_progress`, `completed`, `cancelled`. Example: `?status=accepted&status=cancelled`. When `status` is present it replaces `tab`. **400 `VALIDATION_ERROR`** for an unknown value |
 | `page` / `limit` | Pagination (default 1 / 20, max 100) |
 | `latitude` / `longitude` | Optional pair for `distanceKm` |
 
-`data` is an array of the same card shape as `requests` above. `meta` is `{ page, limit, total, totalPages }`.
+`data` is an array of the same card shape as `requests` above. `meta` is `{ page, limit, total, totalPages }`. A multi-status list is ordered by event date, then start time. `status=new_request` alone keeps the requests order. `status=completed` alone is newest completion first.
 
-`tab=upcoming` keeps a job this crew member already accepted when the organizer later cancels the booking. That card has `status: "cancelled"` and `bookingStatus: "cancelled"`. Show that as the cancelled badge on the accepted-jobs screen. Opening the card returns `requestStatusLabel: "CANCELLED"`. Accept, reject, and shift start stay unavailable.
+`accepted` is an assignment that is not cancelled. `cancelled` is an accepted job whose booking was later cancelled: `status: "cancelled"` and `bookingStatus: "cancelled"`. Show that badge on the accepted-jobs screen. `tab=upcoming` still returns both of those together. Opening a cancelled card returns `requestStatusLabel: "CANCELLED"`. Accept, reject, and shift start stay unavailable.
 
 Offline `tab=requests` returns an empty list.
 
@@ -1708,6 +1709,7 @@ Delete Account → DELETE /users/me
 - [ ] Pay with `POST /users/bookings/:id/payment-order`, open Razorpay Checkout using `keyId` / `orderId` / `amount` (paise), then `POST /users/bookings/:id/payment-verify`. Do not ship the Razorpay key secret in the app. Do not start checkout again while `paymentStatus` is `initiated` or `processing`. If verify never returns, read All Bookings or the booking detail — the webhook may already have confirmed it
 - [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.
 - [ ] Crew job `id` is the integer booking id; `orderId` / `bookingReference` is the human code on the header
+- [ ] Crew order lists: `GET /crew/bookings?tab=` still works. To load more than one section, repeat `status` (`accepted`, `cancelled`, `in_progress`, `completed`, `new_request`), for example `?status=accepted&status=cancelled`
 - [ ] Crew pay (`estimatedEarnings`, `pay`, and completed `payout`) is the amount stored on that booking for this crew member. Later admin percentage changes do not change it. Do not treat it as the organizer’s price
 - [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. The shift code is per person, not the login OTP and not a booking-wide `shiftOtp`
 - [ ] Organizer Order Details: render `shiftValidation.rows`. Supervisors when `mode` is `supervisors`, waiters when `mode` is `waiters`, bouncers when `mode` is `bouncers`. Also render bouncer rows on a supervisors or waiters table when the order includes bouncers. OTP button calls `POST /users/bookings/:id/assignments/:assignmentId/otp` and shows the returned `otp`. A bouncer does not validate other crew
