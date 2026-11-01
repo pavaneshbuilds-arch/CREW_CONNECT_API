@@ -211,7 +211,7 @@ Query: `search` (reference, venue, organizer name/phone), `status`, `eventDateFr
 
 ### `GET /admin/bookings/:id`
 
-Includes requirements, assignments, payments, refunds, and the applied `coupon` (`id`, `code`, `discountType`, `discountValue`) when present. Each requirement has `rate` (fixed per person charged to the organizer) and `amount` (`countRequired × rate`). It also has the snapshotted `crewSharePercent`, `crewAmount` (what one crew member of that role is paid), and `crewPayout` (`countRequired × crewAmount`). Those crew figures are written when the booking is quoted and do not change if the rate card percentage is edited later. `expectedDurationHours` is the shift length only.
+Includes requirements, assignments, payments, refunds, and the applied `coupon` (`id`, `code`, `discountType`, `discountValue`) when present. Each refund includes `razorpayRefundId` (null until Razorpay accepts the cancellation refund). Each requirement has `rate` (fixed per person charged to the organizer) and `amount` (`countRequired × rate`). It also has the snapshotted `crewSharePercent`, `crewAmount` (what one crew member of that role is paid), and `crewPayout` (`countRequired × crewAmount`). Those crew figures are written when the booking is quoted and do not change if the rate card percentage is edited later. `expectedDurationHours` is the shift length only.
 
 ---
 

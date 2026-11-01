@@ -701,11 +701,11 @@ Pricing is computed on the server (do not send rates or totals):
 
 Fixed rates come from the admin rate card (`GET /admin/rates`). Defaults after seed: waiter **₹800**, supervisor **₹1000**, bouncer **₹900** per person per event. Rates are snapshotted onto the booking at quote time, so later admin edits do not change existing bookings. The crew share of each rate is stored on the booking at the same time and is not returned on organizer responses.
 
-Cancellation: allowed while `confirmed` or `crew_assigned`. Within **24 hours** of event start → **50% fee** (50% refund). Otherwise **0% fee**.
+Cancellation: allowed while `confirmed` or `crew_assigned`. Hours are measured until the event start. More than **72 hours** → **100% refund**. **24 to 72 hours**, including exactly 24 and exactly 72 → **50% refund**. Less than **24 hours** → **no refund**. A refund greater than zero is sent through Razorpay to the original payment method. `within24Hours` means no refund.
 
 ### `GET /users/bookings/options`
 
-Dropdowns and rate card for steps 1–2. `rates` are the fixed per-person event amounts (not hourly). `durations` are optional hour shortcuts — the client may send any `expectedDurationHours` from 1 to 24.
+Dropdowns and rate card for steps 1–2. `rates` are the fixed per-person event amounts (not hourly). `durations` are optional hour shortcuts — the client may send any `expectedDurationHours` from 1 to 24. `cancellationPolicy` is the refund terms to show before payment: `terms` plus the four `policy` bands.
 
 ```json
 {
@@ -726,7 +726,16 @@ Dropdowns and rate card for steps 1–2. `rates` are the fixed per-person event 
       { "id": 3, "minWaiters": 20, "maxWaiters": 29, "supervisorCount": 3 },
       { "id": 4, "minWaiters": 30, "maxWaiters": 39, "supervisorCount": 4 },
       { "id": 5, "minWaiters": 40, "maxWaiters": null, "supervisorCount": 5 }
-    ]
+    ],
+    "cancellationPolicy": {
+      "terms": "Cancellation is measured from the event start. More than 72 hours before the event is a full refund, 24 to 72 hours is a 50% refund, and less than 24 hours is no refund.",
+      "policy": [
+        { "minHours": 72, "maxHours": null, "refundPct": 100, "label": "More than 72 hours before the event: 100% refund" },
+        { "minHours": 48, "maxHours": 72, "refundPct": 50, "label": "48–72 hours before the event: 50% refund" },
+        { "minHours": 24, "maxHours": 48, "refundPct": 50, "label": "24–48 hours before the event: 50% refund" },
+        { "minHours": null, "maxHours": 24, "refundPct": 0, "label": "Less than 24 hours before the event: no refund" }
+      ]
+    }
   }
 }
 ```
@@ -895,7 +904,7 @@ The server checks `HMAC-SHA256(razorpayOrderId + "|" + razorpayPaymentId)` again
 
 On a match, the booking becomes `confirmed`, `confirmedAt` is set, `advancePaidPct` is set to `100`, and a `Payment` row is marked `success` with `paymentGatewayRef` set to the Razorpay payment id. The response is the same order-details shape as `GET /users/bookings/:id`. Sending the same three ids again returns that booking.
 
-Razorpay also calls `POST /payments/razorpay/webhook` (no app token). The app should still call verify. `payment.authorized` sets `paymentStatus` to `processing` and leaves the booking `created`. If Checkout succeeds and verify never runs, the webhook marks the payment `success` and confirms the booking when the guards pass. `payment.failed` sets that payment to `failed` and leaves the booking `created`, so it stays in All Bookings and the organizer can call payment-order again. Do not start a second checkout while `paymentStatus` is `initiated` or `processing`. After a dropped verify, refresh with `GET /users/bookings/:id` or `GET /users/bookings?tab=all`.
+Razorpay also calls `POST /payments/razorpay/webhook` (no app token). The app should still call verify. `payment.authorized` sets `paymentStatus` to `processing` and leaves the booking `created`. If Checkout succeeds and verify never runs, the webhook marks the payment `success` and confirms the booking when the guards pass. `payment.failed` sets that payment to `failed` and leaves the booking `created`, so it stays in All Bookings and the organizer can call payment-order again. Do not start a second checkout while `paymentStatus` is `initiated` or `processing`. After a dropped verify, refresh with `GET /users/bookings/:id` or `GET /users/bookings?tab=all`. `refund.processed` marks the cancellation refund `processed` and, when that refund covers the captured amount, sets `paymentStatus` to `refunded`. `refund.failed` marks the refund `failed` and leaves the booking `cancelled`.
 
 When the booking’s supervisor count is greater than 0, verify also stores one waiter quota per supervisor. Waiters are split evenly and the remainder goes on the **last** slots (50 waiters and 4 supervisors → 12, 12, 13, 13). Nobody is attached to a supervisor until they accept the job. Below the admin staffing threshold the supervisor count is 0, so no quotas are stored.
 
@@ -939,7 +948,7 @@ Order Details. Same summary fields (`expectedDurationHours`, snapshotted `rates`
 
 - `shiftValidation` — the crew table this organizer validates. See below.
 - `timeline` — `{ key, label, at, done }` for order placed, confirmed, crew assigned, completed (and cancelled if applicable)
-- `cancellation` — `{ allowed, within24Hours, feePct, refundPct, feeAmount, refundAmount, hoursUntilEvent }`
+- `cancellation` — `{ allowed, within24Hours, feePct, refundPct, feeAmount, refundAmount, hoursUntilEvent, policy, terms, refundStatus }`. `within24Hours` is true only when the event starts in less than 24 hours (no refund). `policy` is the four bands (`minHours`, `maxHours`, `refundPct`, `label`). `terms` is the sentence to show on the confirmation screen. `refundStatus` is `pending`, `processed`, `failed`, or `null` before a cancellation. `paymentStatus` becomes `refunded` only when the Razorpay refund covers the full captured amount. A 50% refund leaves `paymentStatus` as `success`.
 - `assignedCrew` — `{ id, fullName, profilePhotoUrl, role, status }[]`
 - `review` — submitted review or `null`
 
@@ -1004,7 +1013,7 @@ The organizer can issue a code for any row in `shiftValidation.rows`: supervisor
 
 ### `POST /users/bookings/:id/cancel`
 
-Body optional `{ "reason": "…" }`. Allowed on `confirmed` and `crew_assigned` only (**409 `BOOKING_NOT_CANCELLABLE`**). Records a pending refund snapshot (no gateway).
+Body optional `{ "reason": "…" }`. Allowed on `confirmed` and `crew_assigned` only (**409 `BOOKING_NOT_CANCELLABLE`**). The response is the order-details shape. `cancellation.refundStatus` is `processed` when Razorpay has finished the refund or when the amount is zero (less than 24 hours before the event; Razorpay is not called). It is `pending` while Razorpay still owes the transfer, and `failed` when Razorpay rejects it. The booking is still `cancelled` in that failed case. **409 `REFUND_PAYMENT_MISSING`** when a refund is owed and the booking has no captured payment; the booking is not cancelled. **500 `PAYMENT_NOT_CONFIGURED`** when a refund is owed and the Razorpay keys are missing; the booking is not cancelled. A full refund sets `paymentStatus` to `refunded` once Razorpay reports it processed. A 50% refund leaves `paymentStatus` as `success`.
 
 ### `POST /users/bookings/:id/review`
 
@@ -1386,11 +1395,13 @@ Paginated list. Query:
 
 | Param | Notes |
 |---|---|
-| `tab` | `requests` (default, Home feed), `upcoming` (accepted, not started), `active` (in progress), `completed` |
+| `tab` | `requests` (default, Home feed), `upcoming` (accepted, not started, including a booking cancelled after accept), `active` (in progress), `completed` |
 | `page` / `limit` | Pagination (default 1 / 20, max 100) |
 | `latitude` / `longitude` | Optional pair for `distanceKm` |
 
 `data` is an array of the same card shape as `requests` above. `meta` is `{ page, limit, total, totalPages }`.
+
+`tab=upcoming` keeps a job this crew member already accepted when the organizer later cancels the booking. That card has `status: "cancelled"` and `bookingStatus: "cancelled"`. Show that as the cancelled badge on the accepted-jobs screen. Opening the card returns `requestStatusLabel: "CANCELLED"`. Accept, reject, and shift start stay unavailable.
 
 Offline `tab=requests` returns an empty list.
 

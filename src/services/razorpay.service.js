@@ -80,6 +80,35 @@ class RazorpayService {
       throw ApiError.badRequest('Payment signature does not match', { code: 'PAYMENT_SIGNATURE_INVALID' });
     }
   }
+
+  /**
+   * Partial or full refund of a captured payment. `amountPaise` is required so
+   * a cancellation never refunds more than the policy allows. Uses the checkout
+   * keys; payout account number is not required.
+   */
+  async refundPayment(razorpayPaymentId, { amountPaise, receipt, notes } = {}) {
+    try {
+      return await this.client().payments.refund(razorpayPaymentId, {
+        amount: amountPaise,
+        speed: 'normal',
+        receipt,
+        notes,
+      });
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      const statusCode = err?.statusCode || err?.status || err?.response?.status;
+      logger.error('Razorpay refund failed', {
+        statusCode,
+        message: err?.error?.description || err?.message,
+      });
+      const error = new Error(err?.error?.description || err?.message || 'Payment gateway request failed');
+      error.code = 'REFUND_GATEWAY_ERROR';
+      error.statusCode = statusCode;
+      error.definitive =
+        statusCode >= 400 && statusCode < 500 && statusCode !== 409 && statusCode !== 429;
+      throw error;
+    }
+  }
 }
 
 export default new RazorpayService();

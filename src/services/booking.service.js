@@ -33,9 +33,40 @@ const IN_FLIGHT_PAYMENT = ['initiated', 'processing'];
 const OTP_VISIBLE_STATUSES = ['confirmed', 'crew_assigned', 'in_progress'];
 const CANCELLABLE_STATUSES = ['confirmed', 'crew_assigned'];
 const SLOT_STATUSES = ['assigned', 'confirmed', 'in_progress', 'completed'];
-const CANCEL_FEE_HOURS = 24;
-const CANCEL_FEE_PCT = 50;
+const FULL_REFUND_AFTER_HOURS = 72;
+const PARTIAL_REFUND_AFTER_HOURS = 24;
+const PARTIAL_REFUND_PCT = 50;
 const MIN_AMOUNT_PAISE = 100;
+
+const CANCELLATION_POLICY = [
+  {
+    minHours: FULL_REFUND_AFTER_HOURS,
+    maxHours: null,
+    refundPct: 100,
+    label: 'More than 72 hours before the event: 100% refund',
+  },
+  {
+    minHours: 48,
+    maxHours: FULL_REFUND_AFTER_HOURS,
+    refundPct: PARTIAL_REFUND_PCT,
+    label: '48–72 hours before the event: 50% refund',
+  },
+  {
+    minHours: PARTIAL_REFUND_AFTER_HOURS,
+    maxHours: 48,
+    refundPct: PARTIAL_REFUND_PCT,
+    label: '24–48 hours before the event: 50% refund',
+  },
+  {
+    minHours: null,
+    maxHours: PARTIAL_REFUND_AFTER_HOURS,
+    refundPct: 0,
+    label: 'Less than 24 hours before the event: no refund',
+  },
+];
+
+const CANCELLATION_TERMS =
+  'Cancellation is measured from the event start. More than 72 hours before the event is a full refund, 24 to 72 hours is a 50% refund, and less than 24 hours is no refund.';
 
 const bookingDetailInclude = {
   crewRequirements: { orderBy: { id: 'asc' } },
@@ -235,12 +266,25 @@ function serializeCoupon(coupon) {
   return couponService.serializeForBooking(coupon);
 }
 
+function refundPctForHours(hoursUntil) {
+  if (hoursUntil == null || hoursUntil > FULL_REFUND_AFTER_HOURS) return 100;
+  if (hoursUntil >= PARTIAL_REFUND_AFTER_HOURS) return PARTIAL_REFUND_PCT;
+  return 0;
+}
+
+function cancellationPolicyPayload() {
+  return {
+    terms: CANCELLATION_TERMS,
+    policy: CANCELLATION_POLICY,
+  };
+}
+
 function cancellationPreview(booking, now = new Date()) {
   const start = eventStartInstant(booking.eventDate, booking.eventStartTime);
   const hoursUntil = start ? (start.getTime() - now.getTime()) / (1000 * 60 * 60) : null;
-  const within24Hours = hoursUntil == null ? false : hoursUntil <= CANCEL_FEE_HOURS;
-  const feePct = within24Hours ? CANCEL_FEE_PCT : 0;
-  const refundPct = 100 - feePct;
+  const within24Hours = hoursUntil != null && hoursUntil < PARTIAL_REFUND_AFTER_HOURS;
+  const refundPct = refundPctForHours(hoursUntil);
+  const feePct = 100 - refundPct;
   const estimatedTotal = decimal(booking.estimatedTotal) || 0;
   const refundAmount = roundMoney(estimatedTotal * (refundPct / 100));
   const feeAmount = roundMoney(estimatedTotal - refundAmount);
@@ -254,6 +298,8 @@ function cancellationPreview(booking, now = new Date()) {
     refundAmount,
     hoursUntilEvent: hoursUntil == null ? null : roundMoney(hoursUntil),
     cancellationDaysBeforeEvent: daysBefore,
+    ...cancellationPolicyPayload(),
+    refundStatus: (booking.refunds || [])[0]?.status ?? null,
   };
 }
 
@@ -497,6 +543,78 @@ function assertCreated(booking) {
 function toPaise(rupees) {
   const paise = Math.round((Number(rupees) + Number.EPSILON) * 100);
   return Number.isFinite(paise) ? paise : NaN;
+}
+
+function capturedPayment(booking) {
+  return (booking.payments || []).find((row) => row.status === 'success' && row.paymentGatewayRef) || null;
+}
+
+function refundCoversPayment(refundAmount, paymentAmount) {
+  const refundPaise = toPaise(refundAmount);
+  const paymentPaise = toPaise(paymentAmount);
+  return Number.isFinite(refundPaise) && Number.isFinite(paymentPaise) && refundPaise >= paymentPaise;
+}
+
+async function applyGatewayRefund(refund, payment, { razorpayRefundId, gatewayStatus, refundAmount }) {
+  const status = gatewayStatus === 'processed' || gatewayStatus === 'failed' ? gatewayStatus : 'pending';
+  await prisma.$transaction(async (tx) => {
+    await tx.refund.update({
+      where: { id: refund.id },
+      data: {
+        status,
+        ...(razorpayRefundId ? { razorpayRefundId } : {}),
+      },
+    });
+    if (status === 'processed' && payment && refundCoversPayment(refundAmount, payment.amount)) {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: 'refunded' },
+      });
+    }
+  });
+}
+
+async function handleRefundWebhook(event) {
+  const entity = event?.payload?.refund?.entity;
+  const razorpayRefundId = entity?.id || null;
+  const razorpayPaymentId = entity?.payment_id || null;
+  if (!razorpayRefundId && !razorpayPaymentId) {
+    return { received: true, ignored: true };
+  }
+
+  let refund = null;
+  if (razorpayRefundId) {
+    refund = await prisma.refund.findUnique({
+      where: { razorpayRefundId },
+      include: { payment: true },
+    });
+  }
+  if (!refund && razorpayPaymentId) {
+    refund = await prisma.refund.findFirst({
+      where: {
+        status: 'pending',
+        payment: { paymentGatewayRef: razorpayPaymentId },
+      },
+      include: { payment: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+  if (!refund) {
+    logger.info('Razorpay refund webhook for an unknown refund', {
+      event: event?.event,
+      razorpayRefundId,
+      razorpayPaymentId,
+    });
+    return { received: true, ignored: true };
+  }
+
+  const gatewayStatus = event.event === 'refund.failed' ? 'failed' : 'processed';
+  await applyGatewayRefund(refund, refund.payment, {
+    razorpayRefundId: razorpayRefundId || refund.razorpayRefundId,
+    gatewayStatus,
+    refundAmount: refund.refundAmount,
+  });
+  return { received: true, refundStatus: gatewayStatus };
 }
 
 function assertPayableAmount(booking) {
@@ -870,6 +988,7 @@ class BookingService {
       gstPercent: getGstPercent(),
       coverRatio: COVER_RATIO,
       supervisorRanges,
+      cancellationPolicy: cancellationPolicyPayload(),
     };
   }
 
@@ -1161,10 +1280,14 @@ class BookingService {
    * Razorpay server callback. Signature is checked by the controller before this
    * runs. Captured payments follow the same confirm path as checkout verify.
    * Failed payments stay `failed` on a `created` booking so the organizer can retry.
-   * Unknown orders are acknowledged so Razorpay does not retry them.
+   * `refund.processed` and `refund.failed` settle a cancellation refund.
+   * Unknown orders and refunds are acknowledged so Razorpay does not retry them.
    */
   async handleRazorpayWebhook(event) {
     const name = event?.event;
+    if (name === 'refund.processed' || name === 'refund.failed') {
+      return handleRefundWebhook(event);
+    }
     const paymentEntity = event?.payload?.payment?.entity;
     const orderId = paymentEntity?.order_id;
     const paymentId = paymentEntity?.id;
@@ -1353,8 +1476,19 @@ class BookingService {
       throw ApiError.conflict('This booking cannot be cancelled', { code: 'BOOKING_NOT_CANCELLABLE' });
     }
 
+    const payment = capturedPayment(booking);
+    const refundAmount = preview.refundAmount;
+    if (refundAmount > 0 && !payment) {
+      throw ApiError.conflict('This booking has no captured payment to refund', {
+        code: 'REFUND_PAYMENT_MISSING',
+      });
+    }
+    if (refundAmount > 0) {
+      razorpayService.credentials();
+    }
+
     const cancelledAt = new Date();
-    await prisma.$transaction(async (tx) => {
+    const refund = await prisma.$transaction(async (tx) => {
       await tx.booking.update({
         where: { id: booking.id },
         data: {
@@ -1363,17 +1497,55 @@ class BookingService {
           cancellationReason: blankToNull(reason) ?? null,
         },
       });
-      await tx.refund.create({
+      return tx.refund.create({
         data: {
           bookingId: booking.id,
-          paymentId: null,
+          paymentId: payment?.id ?? null,
           cancellationDaysBeforeEvent: preview.cancellationDaysBeforeEvent,
           refundPctApplied: preview.refundPct,
-          refundAmount: preview.refundAmount,
-          status: 'pending',
+          refundAmount,
+          status: refundAmount > 0 ? 'pending' : 'processed',
         },
       });
     });
+
+    let refundStatus = refund.status;
+    if (refundAmount > 0) {
+      const amountPaise = Math.min(toPaise(refundAmount), toPaise(payment.amount));
+      try {
+        const gateway = await razorpayService.refundPayment(payment.paymentGatewayRef, {
+          amountPaise,
+          receipt: `cancel-${booking.id}`.slice(0, 40),
+          notes: {
+            bookingId: String(booking.id),
+            ...(booking.bookingReference ? { bookingReference: booking.bookingReference } : {}),
+          },
+        });
+        const gatewayStatus =
+          gateway.status === 'processed' || gateway.status === 'failed' ? gateway.status : 'pending';
+        await applyGatewayRefund(refund, payment, {
+          razorpayRefundId: gateway.id,
+          gatewayStatus,
+          refundAmount,
+        });
+        refundStatus = gatewayStatus;
+      } catch (err) {
+        if (err?.definitive) {
+          refundStatus = 'failed';
+          await prisma.refund.update({
+            where: { id: refund.id },
+            data: { status: 'failed' },
+          });
+        }
+        logger.error('Cancellation refund was not completed', {
+          bookingId: booking.id,
+          refundId: refund.id,
+          code: err?.code,
+          definitive: Boolean(err?.definitive),
+          message: err?.message,
+        });
+      }
+    }
 
     await activityLogService.record({
       category: 'payment',
@@ -1386,6 +1558,7 @@ class BookingService {
         bookingReference: booking.bookingReference,
         refundPct: preview.refundPct,
         feePct: preview.feePct,
+        refundStatus,
       },
     });
 

@@ -851,6 +851,7 @@ class AdminService {
         refundAmount: decimal(r.refundAmount),
         refundPctApplied: decimal(r.refundPctApplied),
         status: r.status,
+        razorpayRefundId: r.razorpayRefundId,
         createdAt: r.createdAt,
       })),
     };

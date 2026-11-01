@@ -596,7 +596,7 @@ async function listMine(crew, { tab, coords }) {
     where: {
       crewId: crew.id,
       status: { in: statusFilter },
-      booking: tab === 'completed' ? undefined : { status: { not: 'cancelled' } },
+      booking: tab === 'active' ? { status: { not: 'cancelled' } } : undefined,
     },
     include: {
       booking: { include: CREW_JOB_INCLUDE },
