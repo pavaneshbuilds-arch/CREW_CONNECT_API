@@ -64,6 +64,18 @@ npm start
 
 Health check: `GET /health`. API base path: `/api/v1`.
 
+### Production (pm2)
+
+```bash
+npm ci
+npx prisma generate
+npx prisma migrate deploy
+pm2 startOrReload ecosystem.config.cjs
+pm2 save
+```
+
+Push notifications are delivered by the separate `CREW_CONNECT_BACKGROUND_JOBS` worker, which uses the same database.
+
 **Mobile developers:** full request/response docs and screen-to-API mapping are in [docs/MOBILE_API.md](docs/MOBILE_API.md).  
 **Admin web:** console APIs are in [docs/ADMIN_API.md](docs/ADMIN_API.md). The React app lives in the sibling repo `CREW_CONNECT_ADMIN`.
 
