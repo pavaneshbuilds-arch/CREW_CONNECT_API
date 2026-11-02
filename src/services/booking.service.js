@@ -20,6 +20,7 @@ import { generateOtp } from '../utils/otp.js';
 import {
   activityLogService,
   couponService,
+  notificationService,
   rateCardService,
   razorpayService,
   smsService,
@@ -915,6 +916,8 @@ async function confirmPaidBooking(userId, booking, payment, razorpayPaymentId, s
       source: source || 'checkout',
     },
   });
+
+  await notificationService.onBookingConfirmed(booking.id);
 }
 
 /**
@@ -1561,6 +1564,8 @@ class BookingService {
         refundStatus,
       },
     });
+
+    await notificationService.onBookingCancelled(booking.id);
 
     const fresh = await prisma.booking.findUnique({
       where: { id: booking.id },

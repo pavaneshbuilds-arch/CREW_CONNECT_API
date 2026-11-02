@@ -126,9 +126,9 @@ Use this to wire screens that already exist in design.
 These crew screens **cannot** be fully wired yet:
 
 - Dashboard, All Earnings
-- In-app notification inbox
+- In-app notification inbox (pushes are sent; there is no list endpoint yet)
 
-User (organizer) app: **login + Google + profile + addresses + settings + bookings + five-star home quotes**. Notification inbox and the rest of the home catalog are not implemented yet.
+User (organizer) app: **login + Google + profile + addresses + settings + bookings + five-star home quotes**. Push notifications are sent for booking and crew events. A notification inbox endpoint is not implemented yet. The rest of the home catalog is not implemented yet.
 
 ---
 
@@ -170,7 +170,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 ### Not in this API yet (do not block UI mock; backend next)
 
 - Home — flash sale, search, Choose Your Crew catalog, Most Popular. Client quotes are `GET /users/home/reviews`
-- Notification inbox
+- Notification inbox (pushes are sent; there is no list endpoint yet)
 - CMS for About / FAQ / Privacy / Terms (deep-link static URLs)
 
 ---
@@ -405,6 +405,36 @@ Call **once after login** (and again when the FCM token refreshes). Not shown as
 Or `"pnids": ["token1", "token2"]` instead of `pnid`.
 
 **200** — `{ id, mid, pnid, platform, deviceName, lastSeenAt, … }`
+
+`pnid` is the FCM registration token. It must come from that app's own Firebase project: the user app registers tokens from the user project, and the crew app registers tokens from the crew project. The background worker sends a push to every current device for that user or crew member, through the matching project.
+
+### Push notifications
+
+There is no send endpoint. The API stores a `notifications` row, and the background worker delivers it. The phone shows `title` and `body`. `data` values are strings:
+
+| Field | Meaning |
+|---|---|
+| `type` | Why it was sent. See the table below |
+| `screen` | `booking_details`, `job_details`, or `profile` |
+| `bookingId` | Booking to open, when the event is about a booking |
+| `bookingReference` | Human booking code |
+| `crewId` | Crew member, when one person accepted or started |
+| `notificationId` | Stored notification id |
+| `recipientType` | `user` or `crew` |
+
+| `type` | Who | When |
+|---|---|---|
+| `booking_confirmed` | User | Payment confirms the booking |
+| `new_job_request` | Crew | A confirmed booking has an open slot for their role |
+| `job_accepted` | User | A crew member accepts |
+| `crew_assigned` | User | Every required slot is filled |
+| `crew_on_the_way` | User | A crew member starts the shift |
+| `rate_experience` | User | The booking is completed |
+| `booking_cancelled` | Crew | The organizer cancels an accepted job |
+| `reminder` | User and assigned crew | 1 day before, and 2 hours before, the event |
+| `profile_approved` / `profile_rejected` | Crew | Verification or a profile edit is reviewed |
+
+If the organizer turns off `pushNotificationsEnabled`, the row is still stored and the push is not sent. Crew accounts have no separate push toggle.
 
 ---
 
@@ -1694,7 +1724,7 @@ Delete Account → DELETE /users/me
 - [ ] OTP boxes are **4** digits
 - [ ] Persist `accessToken` + `refreshToken`; attach Bearer on all `/users/*`, `/crew/*`, and `/auth/devices` / `/auth/me`
 - [ ] Refresh on 401, then retry
-- [ ] After login, register `mid` + `pnid`
+- [ ] After login, register `mid` + `pnid`. `pnid` is the FCM token. On tap, open `data.screen` (`booking_details`, `job_details`, `profile`) using `data.bookingId` when it is present. Organizer pushes follow `pushNotificationsEnabled`
 - [ ] User Home quotes: `GET /users/home/reviews` (five-star written reviews only; `fullName` and `profilePhotoUrl`, no job title)
 - [ ] Google users: if `phoneVerified === false`, verify a real phone via OTP before treating the number as set
 - [ ] Crew app: gate Home on `verificationStatus === "approved"`

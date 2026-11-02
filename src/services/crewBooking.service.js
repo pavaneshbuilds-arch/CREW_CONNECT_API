@@ -6,7 +6,7 @@ import {
 } from '../config/pricing.js';
 import ApiError from '../utils/apiError.js';
 import { generateOtp } from '../utils/otp.js';
-import { activityLogService, smsService } from './index.js';
+import { activityLogService, notificationService, smsService } from './index.js';
 
 const SLOT_STATUSES = ['assigned', 'confirmed', 'in_progress', 'completed'];
 const OPEN_BOOKING_STATUSES = ['confirmed'];
@@ -893,6 +893,8 @@ class CrewBookingService {
       metadata: { assignmentId: assignment.id, role: assignment.role },
     });
 
+    await notificationService.onJobAccepted(bookingId, crewId);
+
     return this.getById(crewId, bookingId);
   }
 
@@ -971,6 +973,8 @@ class CrewBookingService {
       referenceEntityId: bookingId,
       metadata: { assignmentId: assignment.id },
     });
+
+    await notificationService.onShiftStarted(bookingId, crewId);
 
     return this.getById(crewId, bookingId);
   }
@@ -1065,6 +1069,8 @@ class CrewBookingService {
       referenceEntityId: bookingId,
       metadata: { assignmentId: assignment.id, earningsAmount },
     });
+
+    await notificationService.onBookingCompleted(bookingId);
 
     return this.getById(crewId, bookingId);
   }

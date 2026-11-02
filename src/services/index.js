@@ -8,6 +8,7 @@ export { default as tokenService } from './token.service.js';
 export { default as appInstallService } from './appInstall.service.js';
 export { default as smsService } from './sms.service.js';
 export { default as activityLogService } from './activityLog.service.js';
+export { default as notificationService } from './notification.service.js';
 export { default as rateCardService } from './rateCard.service.js';
 export { default as supervisorRangeService } from './supervisorRange.service.js';
 export { default as couponService } from './coupon.service.js';

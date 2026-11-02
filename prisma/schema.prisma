@@ -148,6 +148,7 @@ enum ReminderStatus {
   pending
   sent
   failed
+  cancelled
 }
 
 enum ActivityLogCategory {
@@ -173,6 +174,24 @@ enum NotificationType {
   new_job_request
   offer
   reminder
+  job_accepted
+  crew_assigned
+  booking_cancelled
+  profile_approved
+  profile_rejected
+  payout_processed
+  payout_failed
+  payout_reversed
+}
+
+// Delivery state for the background worker. The API inserts `pending` rows;
+// CREW_CONNECT_BACKGROUND_JOBS claims and sends them.
+enum NotificationPushStatus {
+  pending
+  processing
+  sent
+  failed
+  skipped
 }
 
 // Auth-support enum for the (added) OTP + refresh-token tables. Not in the original schema doc.
@@ -762,6 +781,7 @@ model ScheduledReminder {
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
+  @@unique([bookingId, recipientType, recipientId, reminderType], map: "scheduled_reminders_recipient_type_key")
   @@index([bookingId])
   @@index([status, scheduledAt])
   @@map("scheduled_reminders")
@@ -919,19 +939,28 @@ model ActivityLog {
 }
 
 model Notification {
-  id                  Int               @id @default(autoincrement())
-  recipientType       AuthSubjectType   @map("recipient_type")
-  recipientId         Int               @map("recipient_id")
-  title               String            @db.VarChar(200)
+  id                  Int                     @id @default(autoincrement())
+  recipientType       AuthSubjectType         @map("recipient_type")
+  recipientId         Int                     @map("recipient_id")
+  title               String                  @db.VarChar(200)
   body                String
   type                NotificationType
-  referenceEntityType String?           @map("reference_entity_type") @db.VarChar(50)
-  referenceEntityId   Int?              @map("reference_entity_id")
-  isRead              Boolean           @default(false) @map("is_read")
-  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  referenceEntityType String?                 @map("reference_entity_type") @db.VarChar(50)
+  referenceEntityId   Int?                    @map("reference_entity_id")
+  // Deep-link payload for the app (`screen`, `bookingId`, `crewId`, `payoutId`).
+  data                Json?
+  isRead              Boolean                 @default(false) @map("is_read")
+  pushStatus          NotificationPushStatus @default(pending) @map("push_status")
+  pushAttempts        Int                     @default(0) @map("push_attempts")
+  pushLockedAt        DateTime?               @map("push_locked_at") @db.Timestamptz(6)
+  pushNextAttemptAt   DateTime?               @map("push_next_attempt_at") @db.Timestamptz(6)
+  pushSentAt          DateTime?               @map("push_sent_at") @db.Timestamptz(6)
+  pushError           String?                 @map("push_error") @db.VarChar(500)
+  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([recipientType, recipientId, createdAt])
   @@index([recipientId, isRead])
+  @@index([pushStatus, createdAt])
   @@map("notifications")
 }
 

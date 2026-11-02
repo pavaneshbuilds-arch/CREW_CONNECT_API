@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../config/prisma.js';
 import ApiError from '../utils/apiError.js';
 import { decrypt, encrypt, maskTail } from '../utils/crypto.js';
-import { activityLogService } from './index.js';
+import { activityLogService, notificationService } from './index.js';
 
 function decimal(value) {
   if (value == null) return null;
@@ -332,6 +332,8 @@ class AdminService {
       referenceEntityId: id,
     });
 
+    await notificationService.onCrewApproved(id);
+
     return this.getCrew(id);
   }
 
@@ -369,6 +371,8 @@ class AdminService {
       referenceEntityId: id,
       metadata: { reason },
     });
+
+    await notificationService.onCrewRejected(id, reason);
 
     return this.getCrew(id);
   }
@@ -576,6 +580,8 @@ class AdminService {
       metadata: { crewId: request.crewId },
     });
 
+    await notificationService.onProfileEditApproved(request.crewId);
+
     return this.getEditRequest(id);
   }
 
@@ -611,6 +617,8 @@ class AdminService {
       referenceEntityId: id,
       metadata: { crewId: request.crewId, reason },
     });
+
+    await notificationService.onProfileEditRejected(request.crewId, reason);
 
     return this.getEditRequest(id);
   }
