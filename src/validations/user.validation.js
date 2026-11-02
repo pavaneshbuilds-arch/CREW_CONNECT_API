@@ -70,3 +70,9 @@ export const homeReviews = {
     limit: Joi.number().integer().min(1).max(50).default(10),
   }),
 };
+
+export const homeTopCrew = {
+  query: Joi.object({
+    role: Joi.string().valid('waiter', 'supervisor', 'bouncer').required(),
+  }),
+};

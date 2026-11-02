@@ -291,6 +291,46 @@ class UserService {
       },
     };
   }
+
+  async listTopCrew(query) {
+    const role = query.role;
+    const rows = await prisma.crewMember.findMany({
+      where: {
+        primaryRole: role,
+        verificationStatus: 'approved',
+        isActive: true,
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        fullName: true,
+        profilePhotoUrl: true,
+        primaryRole: true,
+        yearsOfExperience: true,
+        city: true,
+        _count: {
+          select: {
+            assignments: { where: { status: 'completed', role } },
+          },
+        },
+      },
+    });
+    rows.sort((a, b) => {
+      const jobs = b._count.assignments - a._count.assignments;
+      if (jobs !== 0) return jobs;
+      return a.id - b.id;
+    });
+    return rows.slice(0, 5).map((row) => ({
+      id: row.id,
+      fullName: row.fullName,
+      profilePhotoUrl: row.profilePhotoUrl,
+      role: row.primaryRole,
+      ratingAvg: 5,
+      completedJobs: row._count.assignments,
+      yearsOfExperience: row.yearsOfExperience,
+      city: row.city,
+    }));
+  }
 }
 
 export default new UserService();

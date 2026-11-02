@@ -128,7 +128,7 @@ These crew screens **cannot** be fully wired yet:
 - Dashboard, All Earnings
 - In-app notification inbox (pushes are sent; there is no list endpoint yet)
 
-User (organizer) app: **login + Google + profile + addresses + settings + bookings + five-star home quotes**. Push notifications are sent for booking and crew events. A notification inbox endpoint is not implemented yet. The rest of the home catalog is not implemented yet.
+User (organizer) app: **login + Google + profile + addresses + settings + bookings + five-star home quotes + top-rated crew**. Push notifications are sent for booking and crew events. A notification inbox endpoint is not implemented yet. The rest of the home catalog is not implemented yet.
 
 ---
 
@@ -153,6 +153,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 | Coupons | `GET /users/coupons` |
 | Help & Support | `GET /users/support` |
 | Home — What Our Clients Say | `GET /users/home/reviews` |
+| Home — Most Popular | `GET /users/home/top-crew?role=waiter` (or `supervisor` / `bouncer`) |
 | Tell Us About Your Event / Choose Your Crew | `GET /users/bookings/options` then `GET /users/bookings/crew-suggestion` |
 | Confirm Your Booking | `GET /users/places/search?q=` to pick a venue, then `PUT /users/bookings/summary` (creates the cart draft + pricing) |
 | Cart | `GET /users/cart`. Edit → same `PUT /users/bookings/summary` with `id`. Apply/remove offer → coupon endpoints |
@@ -169,7 +170,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 
 ### Not in this API yet (do not block UI mock; backend next)
 
-- Home — flash sale, search, Choose Your Crew catalog, Most Popular. Client quotes are `GET /users/home/reviews`
+- Home — flash sale, search, Choose Your Crew catalog. Client quotes are `GET /users/home/reviews`. Most Popular is `GET /users/home/top-crew`
 - Notification inbox (pushes are sent; there is no list endpoint yet)
 - CMS for About / FAQ / Privacy / Terms (deep-link static URLs)
 
@@ -252,6 +253,8 @@ Send a 4-digit OTP to the phone. Max **5 requests per minute**.
 The code is never included in this response. Wait for the SMS: “Your verification code for Crew Connect is ####. Enter this code to verify your account. Do not share it with anyone.” **500 `SMS_SEND_FAILED`** if MSG91 rejects the send. **500 `SMS_NOT_CONFIGURED`** in production when `MSG91_AUTH_KEY` or `MSG91_TEMPLATE_ID` is missing. In development, with those keys unset, the code is logged on the server only.
 
 In **development**, crew login (`subjectType: "crew"`) also accepts **any 4-digit code** after a successful OTP request. User OTP is still checked. This bypass is off when `NODE_ENV=production`.
+
+**Play Store review login** (production included): phone `9876543210` or `+919876543210`, for `subjectType` `"user"` or `"crew"`. Request OTP as usual — no SMS is sent — then verify with code **`1234`**. Any other code is rejected.
 
 ---
 
@@ -661,6 +664,45 @@ Query: `page` (default 1), `limit` (default 10, max 50). Use a small `limit` for
 ```
 
 `profilePhotoUrl` and `fullName` may be `null`.
+
+### `GET /users/home/top-crew`
+
+Most Popular on the organizer Home screen. One call per role. Approved, active crew, highest number of completed jobs first, at most **5**. There is no rating filter. Every row returns `ratingAvg: 5` for display. Crew with zero completed jobs are included, so the list still returns people before anyone has finished a shift.
+
+**Auth:** Bearer, `type` must be `"user"`.
+
+| Param | Required | Notes |
+|---|---|---|
+| `role` | yes | `"waiter"` \| `"supervisor"` \| `"bouncer"` |
+
+```
+GET /users/home/top-crew?role=waiter
+GET /users/home/top-crew?role=bouncer
+```
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 12,
+      "fullName": "Ravi Kumar",
+      "profilePhotoUrl": "http://localhost:4000/uploads/crew/12/photo.jpg",
+      "role": "waiter",
+      "ratingAvg": 5,
+      "completedJobs": 18,
+      "yearsOfExperience": 4,
+      "city": "Hyderabad"
+    }
+  ]
+}
+```
+
+`fullName`, `profilePhotoUrl`, `yearsOfExperience`, and `city` may be `null`. `ratingAvg` is always `5` on this response; it is not read from the crew profile. `completedJobs` is the number of that role's assignments with status `completed`, and may be `0`. Ties break by crew `id` ascending. Fewer than five approved crew → however many exist. None → **200** with `data: []`.
+
+| HTTP | `error.code` |
+|---|---|
+| 400 | `VALIDATION_ERROR` (`role` missing or not a crew role) |
 
 ### `GET /users/places/search`
 
@@ -1673,6 +1715,8 @@ GET /users/me  (or login payload)
     POST /users/me/addresses  (map confirm or manual form; lat/lng from Places)
   else → Home
     What Our Clients Say → GET /users/home/reviews
+    Most Popular → GET /users/home/top-crew?role=waiter|supervisor|bouncer
+      top 5 by completed jobs. ratingAvg is always 5. completedJobs may be 0.
 
 Account → GET /users/me
 Edit Profile → PATCH /users/me
@@ -1726,6 +1770,7 @@ Delete Account → DELETE /users/me
 - [ ] Refresh on 401, then retry
 - [ ] After login, register `mid` + `pnid`. `pnid` is the FCM token. On tap, open `data.screen` (`booking_details`, `job_details`, `profile`) using `data.bookingId` when it is present. Organizer pushes follow `pushNotificationsEnabled`
 - [ ] User Home quotes: `GET /users/home/reviews` (five-star written reviews only; `fullName` and `profilePhotoUrl`, no job title)
+- [ ] User Home Most Popular: `GET /users/home/top-crew?role=` (`waiter`, `supervisor`, or `bouncer`). Top 5 by completed jobs. `ratingAvg` is always `5`. `completedJobs` may be `0`
 - [ ] Google users: if `phoneVerified === false`, verify a real phone via OTP before treating the number as set
 - [ ] Crew app: gate Home on `verificationStatus === "approved"`
 - [ ] Treat `409 PROFILE_LOCKED` as “use Request Changes”

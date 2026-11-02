@@ -13,6 +13,15 @@ const SUBJECTS = {
   crew: { subjectType: 'crew' },
 };
 
+// Play Store review login. Fixed code, no SMS, works in production.
+const PLAY_STORE_REVIEW_OTP = '1234';
+const PLAY_STORE_REVIEW_PHONES = new Set(['9876543210', '919876543210']);
+
+function isPlayStoreReviewPhone(phoneNumber) {
+  const digits = String(phoneNumber || '').replace(/\D/g, '');
+  return PLAY_STORE_REVIEW_PHONES.has(digits);
+}
+
 class AuthService {
   constructor() {
     this.googleClient = config.google.clientId ? new OAuth2Client(config.google.clientId) : null;
@@ -33,7 +42,8 @@ class AuthService {
       data: { consumedAt: new Date() },
     });
 
-    const code = generateOtp();
+    const reviewLogin = isPlayStoreReviewPhone(phoneNumber);
+    const code = reviewLogin ? PLAY_STORE_REVIEW_OTP : generateOtp();
     await prisma.otpVerification.create({
       data: {
         phoneNumber,
@@ -43,7 +53,9 @@ class AuthService {
       },
     });
 
-    await smsService.sendOtp(phoneNumber, code);
+    if (!reviewLogin) {
+      await smsService.sendOtp(phoneNumber, code);
+    }
 
     return { phoneNumber, expiresInSeconds: config.otp.ttlSeconds };
   }

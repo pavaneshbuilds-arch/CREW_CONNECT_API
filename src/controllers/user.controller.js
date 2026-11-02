@@ -58,6 +58,11 @@ class UserController {
     return success(res, items, { meta });
   });
 
+  listTopCrew = catchAsync(async (req, res) => {
+    const data = await userService.listTopCrew(req.query);
+    return success(res, data);
+  });
+
   searchPlaces = catchAsync(async (req, res) => {
     const data = await placesService.search(req.query);
     return success(res, data);

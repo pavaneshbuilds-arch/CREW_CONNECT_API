@@ -27,6 +27,7 @@ class UserRoutes {
     this.router.get('/coupons', userController.listCoupons);
     this.router.get('/support', userController.getSupport);
     this.router.get('/home/reviews', validate(schema.homeReviews), userController.listHomeReviews);
+    this.router.get('/home/top-crew', validate(schema.homeTopCrew), userController.listTopCrew);
     this.router.get('/places/search', placesLimiter, validate(schema.searchPlaces), userController.searchPlaces);
 
     this.router.get('/bookings/options', bookingController.getOptions);
