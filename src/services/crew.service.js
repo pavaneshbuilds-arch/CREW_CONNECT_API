@@ -229,6 +229,15 @@ class CrewService {
 
     const existing = await prisma.crewBankDetail.findFirst({ where: { crewId } });
     if (existing) {
+      let previousAccount = null;
+      try {
+        previousAccount = existing.accountNumber ? decrypt(existing.accountNumber) : null;
+      } catch {
+        previousAccount = null;
+      }
+      const accountChanged = previousAccount !== data.accountNumber;
+      const ifscChanged = (existing.ifscCode || null) !== (data.ifscCode || null);
+      if (accountChanged || ifscChanged) payload.razorpayFundAccountId = null;
       await prisma.crewBankDetail.update({ where: { id: existing.id }, data: payload });
     } else {
       await prisma.crewBankDetail.create({ data: { crewId, ...payload } });

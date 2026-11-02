@@ -1484,7 +1484,7 @@ Drive the footer from `actions`. `shift.otpIssued` becomes true once a code has 
 
 After verify, poll this endpoint for the timer (`elapsedSeconds` / `remainingSeconds` / `progressPercent`); prefer a client timer from `shift.startedAt` + `expectedDurationSeconds`, using `serverNow` to sync.
 
-On **completed**, `payout` and `performance` are filled (rating comes from the organizer’s review when present). `payout.total` and `payout.baseEarnings` are the same stored crew amount shown while picking the job.
+On **completed**, `payout` and `performance` are filled (rating comes from the organizer’s review when present). `payout.total` and `payout.baseEarnings` are the same stored crew amount shown while picking the job. `payout.status` is `unpaid` until an admin checks the order out to the crew member’s bank account. It then becomes `processing`, `paid`, `failed`, or `reversed`.
 
 **404 `BOOKING_NOT_FOUND`** if it is not an open job for this crew’s role and they have no assignment on it.
 
@@ -1710,7 +1710,7 @@ Delete Account → DELETE /users/me
 - [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.
 - [ ] Crew job `id` is the integer booking id; `orderId` / `bookingReference` is the human code on the header
 - [ ] Crew order lists: `GET /crew/bookings?tab=` still works. To load more than one section, repeat `status` (`accepted`, `cancelled`, `in_progress`, `completed`, `new_request`), for example `?status=accepted&status=cancelled`
-- [ ] Crew pay (`estimatedEarnings`, `pay`, and completed `payout`) is the amount stored on that booking for this crew member. Later admin percentage changes do not change it. Do not treat it as the organizer’s price
+- [ ] Crew pay (`estimatedEarnings`, `pay`, and completed `payout`) is the amount stored on that booking for this crew member. Later admin percentage changes do not change it. Do not treat it as the organizer’s price. Completed `payout.status` stays `unpaid` until admin checkout; then show `processing`, `paid`, `failed`, or `reversed`
 - [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. The shift code is per person, not the login OTP and not a booking-wide `shiftOtp`
 - [ ] Organizer Order Details: render `shiftValidation.rows`. Supervisors when `mode` is `supervisors`, waiters when `mode` is `waiters`, bouncers when `mode` is `bouncers`. Also render bouncer rows on a supervisors or waiters table when the order includes bouncers. OTP button calls `POST /users/bookings/:id/assignments/:assignmentId/otp` and shows the returned `otp`. A bouncer does not validate other crew
 - [ ] Crew Start Shift: open the code screen only when `actions.canStartShift` is true. There is no resend from the crew app

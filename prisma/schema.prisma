@@ -131,7 +131,24 @@ enum AuditActionType {
   coupon_created
   coupon_updated
   coupon_deleted
+  crew_payout
   other
+}
+
+enum CrewPayoutStatus {
+  queued
+  processing
+  processed
+  failed
+  reversed
+}
+
+enum AssignmentPayoutStatus {
+  unpaid
+  processing
+  paid
+  failed
+  reversed
 }
 
 enum ReminderRecipientType {
@@ -270,6 +287,7 @@ model CrewMember {
   penalties           CrewPenalty[]
   sosContacts         CrewSosContact[]
   complaints          CrewComplaint[]
+  payouts             CrewPayout[]
 
   @@map("crew_members")
 }
@@ -322,9 +340,11 @@ model CrewBankDetail {
   accountHolderName String?  @map("account_holder_name") @db.VarChar(150)
   accountNumber     String?  @map("account_number")
   ifscCode          String?  @map("ifsc_code") @db.VarChar(15)
-  upiId             String?  @map("upi_id") @db.VarChar(100)
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  upiId                 String?  @map("upi_id") @db.VarChar(100)
+  razorpayContactId     String?  @map("razorpay_contact_id") @db.VarChar(50)
+  razorpayFundAccountId String?  @map("razorpay_fund_account_id") @db.VarChar(50)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   crew CrewMember @relation(fields: [crewId], references: [id], onDelete: Cascade)
 
@@ -365,6 +385,7 @@ model Admin {
   reviewedProfileEdits CrewProfileEditRequest[]
   rateCardsUpdated     CrewRateCard[]          @relation("CrewRateCardUpdatedBy")
   rateLogs             CrewRateLog[]           @relation("CrewRateLogChangedBy")
+  payouts              CrewPayout[]
 
   @@map("admins")
 }
@@ -445,6 +466,7 @@ model Booking {
   jobRejections      CrewJobRejection[]
   payments           Payment[]
   refunds            Refund[]
+  payouts            CrewPayout[]
   reviews            Review[]
   complaints         CrewComplaint[]
   scheduledReminders ScheduledReminder[]
@@ -487,8 +509,9 @@ model EventCrewAssignment {
   shiftOtp                 String?          @map("shift_otp") @db.VarChar(4)
   shiftOtpIssuedAt         DateTime?        @map("shift_otp_issued_at") @db.Timestamptz(6)
   reportsToAssignmentId    Int?             @map("reports_to_assignment_id")
-  earningsAmount           Decimal?         @map("earnings_amount") @db.Decimal(10, 2)
-  performanceBonus         Decimal          @default(0) @map("performance_bonus") @db.Decimal(10, 2)
+  earningsAmount           Decimal?               @map("earnings_amount") @db.Decimal(10, 2)
+  performanceBonus         Decimal                @default(0) @map("performance_bonus") @db.Decimal(10, 2)
+  payoutStatus             AssignmentPayoutStatus @default(unpaid) @map("payout_status")
   reopenedForReassignment  Boolean          @default(false) @map("reopened_for_reassignment")
   createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -502,6 +525,7 @@ model EventCrewAssignment {
   dateBlocks         CrewDateBlock[]
   walletTransactions WalletTransaction[]
   penalties          CrewPenalty[]
+  payouts            CrewPayout[]
 
   @@unique([bookingId, crewId])
   @@index([bookingId])
@@ -583,6 +607,38 @@ model Refund {
 
   @@index([bookingId])
   @@map("refunds")
+}
+
+// One RazorpayX transfer for a completed assignment. activeAssignmentId stays
+// set while the payout is queued, processing, or processed so a second
+// checkout cannot pay the same shift again. It is cleared on failure or
+// reversal so the admin can retry.
+model CrewPayout {
+  id                 Int              @id @default(autoincrement())
+  bookingId          Int              @map("booking_id")
+  assignmentId       Int              @map("event_assignment_id")
+  crewId             Int              @map("crew_id")
+  amount             Decimal          @db.Decimal(10, 2)
+  status             CrewPayoutStatus @default(queued)
+  razorpayPayoutId   String?          @unique @map("razorpay_payout_id") @db.VarChar(50)
+  mode               String           @db.VarChar(10)
+  idempotencyKey     String           @unique @map("idempotency_key") @db.VarChar(40)
+  failureReason      String?          @map("failure_reason")
+  paidByAdminId      Int              @map("paid_by_admin_id")
+  processedAt        DateTime?        @map("processed_at") @db.Timestamptz(6)
+  activeAssignmentId Int?             @unique @map("active_assignment_id")
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking     Booking             @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  assignment  EventCrewAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  crew        CrewMember          @relation(fields: [crewId], references: [id])
+  paidByAdmin Admin               @relation(fields: [paidByAdminId], references: [id])
+
+  @@index([bookingId])
+  @@index([assignmentId])
+  @@index([crewId])
+  @@map("crew_payouts")
 }
 
 model CrewWallet {

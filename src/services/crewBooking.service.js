@@ -472,6 +472,7 @@ function serializeDetails(booking, { crew, assignment, coords }) {
         ? {
             total: decimal(assignment?.earningsAmount) ?? pay.total,
             baseEarnings: pay.basePay,
+            status: assignment?.payoutStatus || 'unpaid',
           }
         : null,
     performance:

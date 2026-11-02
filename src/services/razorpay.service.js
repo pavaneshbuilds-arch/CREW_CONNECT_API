@@ -109,6 +109,73 @@ class RazorpayService {
       throw error;
     }
   }
+
+  /**
+   * RazorpayX payouts use the same API keys plus the current-account number
+   * that funds the transfer.
+   */
+  payoutCredentials() {
+    const { keyId, keySecret, accountNumber } = config.razorpay;
+    if (!keyId || !keySecret || !accountNumber) {
+      throw ApiError.internal('Payment gateway is not configured', { code: 'PAYMENT_NOT_CONFIGURED' });
+    }
+    return { keyId, keySecret, accountNumber };
+  }
+
+  async razorpayRequest(path, { method = 'POST', body, headers = {} } = {}) {
+    const { keyId, keySecret } = this.payoutCredentials();
+    let response;
+    try {
+      response = await fetch(`https://api.razorpay.com/v1${path}`, {
+        method,
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`,
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (err) {
+      logger.error('Razorpay request failed', { path, message: err.message });
+      const error = new Error('Payment gateway request failed');
+      error.code = 'PAYOUT_GATEWAY_ERROR';
+      error.definitive = false;
+      throw error;
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      logger.error('Razorpay request rejected', {
+        path,
+        statusCode: response.status,
+        code: data?.error?.code,
+      });
+      const error = new Error(data?.error?.description || 'Payment gateway request failed');
+      error.code = 'PAYOUT_GATEWAY_ERROR';
+      error.statusCode = response.status;
+      error.definitive = response.status >= 400
+        && response.status < 500
+        && response.status !== 409
+        && response.status !== 429;
+      throw error;
+    }
+    return data;
+  }
+
+  createContact(payload) {
+    return this.razorpayRequest('/contacts', { body: payload });
+  }
+
+  createFundAccount(payload) {
+    return this.razorpayRequest('/fund_accounts', { body: payload });
+  }
+
+  createPayout(payload, idempotencyKey) {
+    return this.razorpayRequest('/payouts', {
+      body: payload,
+      headers: { 'X-Payout-Idempotency': idempotencyKey },
+    });
+  }
 }
 
 export default new RazorpayService();

@@ -100,7 +100,7 @@ Bearer token. Returns the signed-in admin (`id`, `email`, `fullName`, `role`, `i
 | Crew review | `GET /admin/crew/:id` then approve / reject / suspend |
 | Edit requests | `GET /admin/edit-requests?status=pending` |
 | Users | `GET /admin/users` |
-| Bookings | `GET /admin/bookings` |
+| Bookings | `GET /admin/bookings` then `POST /admin/bookings/:id/checkout` on a completed order |
 | Coupons | `GET /admin/coupons` then create / patch / delete |
 | Crew rates | `GET /admin/rates` then `PATCH /admin/rates` |
 | Rate change log | `GET /admin/rates/logs` |
@@ -203,8 +203,6 @@ Includes addresses and booking / review counts.
 
 ## 8. Bookings
 
-Read-only in this release (assignment / payment actions come later).
-
 ### `GET /admin/bookings`
 
 Query: `search` (reference, venue, organizer name/phone), `status`, `eventDateFrom`, `eventDateTo`.
@@ -212,6 +210,39 @@ Query: `search` (reference, venue, organizer name/phone), `status`, `eventDateFr
 ### `GET /admin/bookings/:id`
 
 Includes requirements, assignments, payments, refunds, and the applied `coupon` (`id`, `code`, `discountType`, `discountValue`) when present. Each refund includes `razorpayRefundId` (null until Razorpay accepts the cancellation refund). Each requirement has `rate` (fixed per person charged to the organizer) and `amount` (`countRequired × rate`). It also has the snapshotted `crewSharePercent`, `crewAmount` (what one crew member of that role is paid), and `crewPayout` (`countRequired × crewAmount`). Those crew figures are written when the booking is quoted and do not change if the rate card percentage is edited later. `expectedDurationHours` is the shift length only.
+
+Each assignment includes `earningsAmount`, `performanceBonus`, `payoutAmount` (`earningsAmount + performanceBonus`, or `null` before the shift is completed), and `payoutStatus` (`unpaid`, `processing`, `paid`, `failed`, `reversed`). `bankDetails` on the assignment is `{ hasBankDetails, accountNumberMasked, ifscCode }`. The full account number stays on the crew review payload.
+
+### `POST /admin/bookings/:id/checkout`
+
+Sends a RazorpayX bank transfer for every completed assignment on this booking whose payout amount is greater than 0 and is not already `processing` or `paid`. The amount is `earningsAmount + performanceBonus`, in paise. The destination is that crew member’s saved account holder, account number, and IFSC. IMPS is used up to ₹5,00,000 and NEFT above that. A low RazorpayX balance queues the payout instead of failing it.
+
+The booking must be `completed`. **404 `BOOKING_NOT_FOUND`**. **409 `BOOKING_NOT_COMPLETED`**. **409 `NO_CREW_EARNINGS`** when no completed assignment has an amount to pay. **500 `PAYMENT_NOT_CONFIGURED`** when the Razorpay keys or `RAZORPAYX_ACCOUNT_NUMBER` are missing.
+
+Calling checkout again does not create a second transfer for an assignment that is `processing` or `paid`. `failed` and `reversed` can be retried. A `processing` row that never received a Razorpay payout id is resumed with the same idempotency key.
+
+The response is **200** even when some crew are skipped. `data` has `bookingId` and `results`. Each row has `assignmentId`, `crewId`, `crewName`, `amount`, `payoutStatus`, `payoutId`, `razorpayPayoutId`, `error`, and `failureReason`. `error` is `null` or one of `BANK_DETAILS_MISSING`, `PAYOUT_ALREADY_SETTLED`, `PAYOUT_GATEWAY_ERROR`.
+
+```json
+{
+  "bookingId": 12,
+  "results": [
+    {
+      "assignmentId": 40,
+      "crewId": 7,
+      "crewName": "Maxwell D.",
+      "amount": 700,
+      "payoutStatus": "processing",
+      "payoutId": 3,
+      "razorpayPayoutId": "pout_00000000000001",
+      "error": null,
+      "failureReason": null
+    }
+  ]
+}
+```
+
+`payout.processed`, `payout.failed`, `payout.reversed`, and `payout.queued` on `POST /payments/razorpay/webhook` move `payoutStatus`. `paid` is set only after Razorpay reports the transfer as processed. Writes `crew_payout` to the admin audit log.
 
 ---
 
@@ -385,7 +416,7 @@ Defaults after migrate/seed:
 
 ### `GET /admin/audit-logs`
 
-PostgreSQL admin actions. Query: `actionType`, `adminId`. `actionType` includes `rate_updated`, `supervisor_ranges_updated`, `coupon_created`, `coupon_updated`, and `coupon_deleted`.
+PostgreSQL admin actions. Query: `actionType`, `adminId`. `actionType` includes `rate_updated`, `supervisor_ranges_updated`, `coupon_created`, `coupon_updated`, `coupon_deleted`, and `crew_payout`.
 
 ### `GET /admin/activity-logs`
 

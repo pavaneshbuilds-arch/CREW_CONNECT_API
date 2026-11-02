@@ -20,6 +20,15 @@ function dateToTimeString(date) {
   return date.toISOString().slice(11, 16);
 }
 
+function roundMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+function assignmentPayoutAmount(assignment) {
+  if (assignment.earningsAmount == null) return null;
+  return roundMoney(Number(assignment.earningsAmount) + Number(assignment.performanceBonus || 0));
+}
+
 function paginationMeta({ page, limit, total }) {
   return {
     page,
@@ -535,6 +544,9 @@ class AdminService {
       if (bank.accountNumber !== undefined) payload.accountNumber = encrypt(bank.accountNumber);
       if (bank.ifscCode !== undefined) payload.ifscCode = bank.ifscCode;
       if (bank.upiId !== undefined) payload.upiId = bank.upiId || null;
+      if (bank.accountNumber !== undefined || bank.ifscCode !== undefined) {
+        payload.razorpayFundAccountId = null;
+      }
 
       const existing = await tx.crewBankDetail.findFirst({ where: { crewId } });
       if (existing) await tx.crewBankDetail.update({ where: { id: existing.id }, data: payload });
@@ -772,6 +784,11 @@ class AdminService {
                 phoneNumber: true,
                 profilePhotoUrl: true,
                 primaryRole: true,
+                bankDetails: {
+                  select: { accountNumber: true, ifscCode: true },
+                  orderBy: { id: 'asc' },
+                  take: 1,
+                },
               },
             },
             assignedByAdmin: { select: { id: true, fullName: true, email: true } },
@@ -822,20 +839,36 @@ class AdminService {
           crewPayout: crewAmount == null ? null : money(countRequired * crewAmount),
         };
       }),
-      assignments: booking.assignments.map((a) => ({
-        id: a.id,
-        crewId: a.crewId,
-        role: a.role,
-        assignmentMethod: a.assignmentMethod,
-        status: a.status,
-        earningsAmount: decimal(a.earningsAmount),
-        performanceBonus: decimal(a.performanceBonus),
-        shiftStartedAt: a.shiftStartedAt,
-        shiftCompletedAt: a.shiftCompletedAt,
-        createdAt: a.createdAt,
-        crew: a.crew,
-        assignedByAdmin: a.assignedByAdmin,
-      })),
+      assignments: booking.assignments.map((a) => {
+        const bank = a.crew?.bankDetails?.[0];
+        const accountNumber = safeDecrypt(bank?.accountNumber);
+        let crew = null;
+        if (a.crew) {
+          const { bankDetails: _bankDetails, ...rest } = a.crew;
+          crew = rest;
+        }
+        return {
+          id: a.id,
+          crewId: a.crewId,
+          role: a.role,
+          assignmentMethod: a.assignmentMethod,
+          status: a.status,
+          earningsAmount: decimal(a.earningsAmount),
+          performanceBonus: decimal(a.performanceBonus),
+          payoutStatus: a.payoutStatus,
+          payoutAmount: assignmentPayoutAmount(a),
+          bankDetails: {
+            hasBankDetails: Boolean(accountNumber && bank?.ifscCode),
+            accountNumberMasked: accountNumber ? maskTail(accountNumber) : null,
+            ifscCode: bank?.ifscCode || null,
+          },
+          shiftStartedAt: a.shiftStartedAt,
+          shiftCompletedAt: a.shiftCompletedAt,
+          createdAt: a.createdAt,
+          crew,
+          assignedByAdmin: a.assignedByAdmin,
+        };
+      }),
       payments: booking.payments.map((p) => ({
         id: p.id,
         paymentType: p.paymentType,

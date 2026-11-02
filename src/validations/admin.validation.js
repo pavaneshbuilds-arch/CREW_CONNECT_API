@@ -100,6 +100,7 @@ export const listAuditLogs = {
       'coupon_created',
       'coupon_updated',
       'coupon_deleted',
+      'crew_payout',
       'other'
     ),
     adminId: Joi.number().integer().positive(),

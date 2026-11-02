@@ -17,6 +17,7 @@ export { default as placesService } from './places.service.js';
 export { default as authService } from './auth.service.js';
 export { default as userService } from './user.service.js';
 export { default as razorpayService } from './razorpay.service.js';
+export { default as payoutService } from './payout.service.js';
 export { default as bookingService } from './booking.service.js';
 export { default as crewComplaintService } from './crewComplaint.service.js';
 export { default as crewService } from './crew.service.js';

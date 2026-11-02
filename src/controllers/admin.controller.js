@@ -1,6 +1,6 @@
 import catchAsync from '../utils/catchAsync.js';
 import { success, created } from '../utils/apiResponse.js';
-import { adminService, couponService, rateCardService, supervisorRangeService } from '../services/index.js';
+import { adminService, couponService, payoutService, rateCardService, supervisorRangeService } from '../services/index.js';
 
 class AdminController {
   me = catchAsync(async (req, res) => {
@@ -81,6 +81,11 @@ class AdminController {
   getBooking = catchAsync(async (req, res) => {
     const data = await adminService.getBooking(req.params.id);
     return success(res, data);
+  });
+
+  checkoutBooking = catchAsync(async (req, res) => {
+    const data = await payoutService.checkout(req.params.id, req.auth.sub);
+    return success(res, data, { message: 'Checkout started' });
   });
 
   listRates = catchAsync(async (req, res) => {

@@ -86,6 +86,8 @@ const config = {
     keySecret: get('RAZORPAY_KEY_SECRET', { fallback: undefined }),
     // Set in the Razorpay dashboard when the webhook is created. Not the key secret.
     webhookSecret: get('RAZORPAY_WEBHOOK_SECRET', { fallback: undefined }),
+    // RazorpayX current-account number used as the source of crew payouts.
+    accountNumber: get('RAZORPAYX_ACCOUNT_NUMBER', { fallback: undefined }),
   },
 
   // 32-byte key (hex or base64) used for AES-256-GCM encryption of sensitive

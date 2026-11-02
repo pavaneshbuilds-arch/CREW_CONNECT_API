@@ -36,6 +36,7 @@ class AdminRoutes {
 
     this.router.get('/bookings', validate(schema.listBookings), adminController.listBookings);
     this.router.get('/bookings/:id', validate(schema.idParam), adminController.getBooking);
+    this.router.post('/bookings/:id/checkout', validate(schema.idParam), adminController.checkoutBooking);
 
     this.router.get('/rates/logs', validate(schema.listRateLogs), adminController.listRateLogs);
     this.router.get('/rates', adminController.listRates);
