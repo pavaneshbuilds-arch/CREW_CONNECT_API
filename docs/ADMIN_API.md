@@ -211,7 +211,7 @@ Query: `search` (reference, venue, organizer name/phone), `status`, `eventDateFr
 
 ### `GET /admin/bookings/:id`
 
-Includes requirements, assignments, payments, refunds, and the applied `coupon` (`id`, `code`, `discountType`, `discountValue`) when present. Each refund includes `razorpayRefundId` (null until Razorpay accepts the cancellation refund). Each requirement has `rate` (fixed per person charged to the organizer) and `amount` (`countRequired × rate`). It also has the snapshotted `crewSharePercent`, `crewAmount` (what one crew member of that role is paid), and `crewPayout` (`countRequired × crewAmount`). Those crew figures are written when the booking is quoted and do not change if the rate card percentage is edited later. `expectedDurationHours` is the shift length only.
+Includes requirements, assignments, payments, refunds, and the applied `coupon` (`id`, `code`, `discountType`, `discountValue`) when present. Each refund includes `razorpayRefundId` (null until Razorpay accepts the cancellation refund). Each requirement has `rate` (fixed per person charged to the organizer) and `amount` (`countRequired × rate`). It also has the snapshotted `crewSharePercent`, `crewAmount` (what one crew member of that role is paid), and `crewPayout` (`countRequired × crewAmount`). Those crew figures are written when the booking is quoted and do not change if the rate card percentage is edited later. Tax is the snapshotted `cgstPercent`, `sgstPercent`, `cgstAmount`, `sgstAmount`, and `gstAmount` (`cgstAmount + sgstAmount`). `expectedDurationHours` is the shift length only.
 
 ---
 
@@ -269,7 +269,7 @@ Hard-deletes only when no booking references the coupon. Otherwise **409 `COUPON
 
 ## 8b. Crew event rates
 
-Current waiter / supervisor / bouncer **fixed amounts per person per event** used when quoting a booking, plus the **percentage of that amount paid to the crew**. Hours are collected on the booking for display only — they are not multiplied into the price. Edits write a row to `crew_rate_logs` and an admin audit entry (`rate_updated`). Already-placed bookings keep the organizer rate, the percentage, and the resulting per-person `crewAmount` snapshotted on their requirements. Later percentage edits do not change those stored amounts.
+Current waiter / supervisor / bouncer **fixed amounts per person per event** used when quoting a booking, plus the **percentage of that amount paid to the crew**, plus **CGST** and **SGST** percents. Hours are collected on the booking for display only — they are not multiplied into the price. Rate edits write a row to `crew_rate_logs` and an admin audit entry (`rate_updated`). Tax edits write an admin audit entry (`other`, `targetEntityType: "tax_settings"`). Already-placed bookings keep the organizer rate, the percentage, the resulting per-person `crewAmount`, and the CGST/SGST percents and amounts snapshotted at quote time. Later edits do not change those stored amounts.
 
 Defaults after migrate/seed: each role’s crew share is **100%**, so existing bookings keep paying the full snapshotted rate until an admin sets a lower percentage.
 
@@ -279,7 +279,11 @@ Defaults after migrate/seed: each role’s crew share is **100%**, so existing b
 {
   "rates": { "waiter": 800, "supervisor": 1000, "bouncer": 900 },
   "crewSharePercents": { "waiter": 70, "supervisor": 60, "bouncer": 65 },
+  "cgstPercent": 9,
+  "sgstPercent": 9,
   "gstPercent": 18,
+  "taxUpdatedAt": "2026-11-03T16:00:00.000Z",
+  "taxUpdatedBy": { "id": 1, "fullName": "Super Admin", "email": "admin@crewconnect.local" },
   "items": [
     {
       "id": 1,
@@ -293,11 +297,11 @@ Defaults after migrate/seed: each role’s crew share is **100%**, so existing b
 }
 ```
 
-`rate` is what the organizer is charged per person. `crewSharePercent` is the share of that rate paid to one crew member of the role (0–100).
+`rate` is what the organizer is charged per person. `crewSharePercent` is the share of that rate paid to one crew member of the role (0–100). `cgstPercent` and `sgstPercent` are each applied to the booking subtotal. `gstPercent` is their sum and is not editable on its own. Defaults after migrate: **9** and **9**.
 
 ### `PATCH /admin/rates`
 
-Send one or more prices, one or more percents, or both. Unspecified prices and percents are left unchanged. A role whose price and percent are both unchanged is skipped (no log row).
+Send one or more prices, one or more crew-share percents, one or both tax percents, or any mix. Unspecified prices, crew-share percents, and tax percents are left unchanged. A role whose price and percent are both unchanged is skipped (no log row). A tax percent that matches the stored value is skipped (no audit row).
 
 ```json
 {
@@ -305,13 +309,21 @@ Send one or more prices, one or more percents, or both. Unspecified prices and p
   "supervisor": 1100,
   "bouncer": 950,
   "crewSharePercent": { "waiter": 70, "supervisor": 60, "bouncer": 65 },
+  "cgstPercent": 9,
+  "sgstPercent": 9,
   "note": "Q4 share"
 }
 ```
 
-**400 `VALIDATION_ERROR`** if none of the three prices and no `crewSharePercent` entry is sent. Each price must be between 1 and 100000. Each percent must be between 0 and 100.
+Tax only:
 
-Response is the same shape as `GET /admin/rates`.
+```json
+{ "cgstPercent": 9, "sgstPercent": 9 }
+```
+
+**400 `VALIDATION_ERROR`** if none of the three prices, no `crewSharePercent` entry, and neither tax percent is sent. Each price must be between 1 and 100000. Each crew-share percent and each tax percent must be between 0 and 100. **400 `TAX_PERCENT_INVALID`** if CGST and SGST together exceed 100.
+
+Response is the same shape as `GET /admin/rates`. Success `message` is `Rates updated`, `Tax rates updated`, or `Pricing updated` when both change.
 
 ### `GET /admin/rates/logs`
 

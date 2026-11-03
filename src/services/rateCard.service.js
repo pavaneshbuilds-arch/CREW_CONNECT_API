@@ -1,5 +1,11 @@
 import { prisma } from '../config/prisma.js';
-import { CREW_ROLES, DEFAULT_CREW_SHARE_PERCENT, DEFAULT_RATES, getGstPercent } from '../config/pricing.js';
+import {
+  CREW_ROLES,
+  DEFAULT_CREW_SHARE_PERCENT,
+  DEFAULT_RATES,
+  defaultTaxSplit,
+  roundPercent,
+} from '../config/pricing.js';
 import ApiError from '../utils/apiError.js';
 import { activityLogService } from './index.js';
 
@@ -53,10 +59,29 @@ class RateCardService {
     return Object.fromEntries(CREW_ROLES.map((role) => [role, cards[role].rate]));
   }
 
+  /**
+   * Current CGST and SGST percents. Missing row falls back to half of GST_PERCENT
+   * so quotes still work before the tax_settings seed has run.
+   */
+  async getTaxRates() {
+    const row = await prisma.taxSetting.findUnique({ where: { id: 1 } });
+    if (!row) return defaultTaxSplit();
+    return {
+      cgstPercent: Number(row.cgstPercent),
+      sgstPercent: Number(row.sgstPercent),
+    };
+  }
+
   async listCurrent() {
-    const rows = await prisma.crewRateCard.findMany({
-      include: { updatedBy: { select: { id: true, fullName: true, email: true } } },
-    });
+    const [rows, taxRow] = await Promise.all([
+      prisma.crewRateCard.findMany({
+        include: { updatedBy: { select: { id: true, fullName: true, email: true } } },
+      }),
+      prisma.taxSetting.findUnique({
+        where: { id: 1 },
+        include: { updatedBy: { select: { id: true, fullName: true, email: true } } },
+      }),
+    ]);
     const byRole = Object.fromEntries(rows.map((row) => [row.role, row]));
     const items = CREW_ROLES.map((role) => {
       const row = byRole[role];
@@ -79,31 +104,87 @@ class RateCardService {
       };
     });
 
+    const fallbackTax = defaultTaxSplit();
+    const cgstPercent = taxRow ? decimal(taxRow.cgstPercent) : fallbackTax.cgstPercent;
+    const sgstPercent = taxRow ? decimal(taxRow.sgstPercent) : fallbackTax.sgstPercent;
+
     return {
       rates: Object.fromEntries(items.map((item) => [item.role, item.rate])),
       crewSharePercents: Object.fromEntries(items.map((item) => [item.role, item.crewSharePercent])),
-      gstPercent: getGstPercent(),
+      cgstPercent,
+      sgstPercent,
+      gstPercent: roundPercent(cgstPercent + sgstPercent),
+      taxUpdatedAt: taxRow?.updatedAt ?? null,
+      taxUpdatedBy: serializeAdmin(taxRow?.updatedBy),
       items,
     };
   }
 
   async updateRates(adminId, body) {
+    const hasTax = body.cgstPercent != null || body.sgstPercent != null;
     const percents = body.crewSharePercent || {};
     const updates = CREW_ROLES.filter((role) => body[role] != null || percents[role] != null).map((role) => ({
       role,
       rate: body[role] != null ? Number(body[role]) : null,
       crewSharePercent: percents[role] != null ? Number(percents[role]) : null,
     }));
-    if (!updates.length) {
-      throw ApiError.badRequest('Provide at least one rate or crew share percent to update', {
+    if (!updates.length && !hasTax) {
+      throw ApiError.badRequest('Provide at least one rate, crew share percent, or tax percent to update', {
         code: 'RATE_REQUIRED',
       });
     }
 
     const note = body.note ? String(body.note).trim() || null : null;
     const changes = [];
+    let taxChange = null;
 
     await prisma.$transaction(async (tx) => {
+      if (hasTax) {
+        const existingTax = await tx.taxSetting.findUnique({ where: { id: 1 } });
+        const fallbackTax = defaultTaxSplit();
+        const previousCgst = existingTax ? Number(existingTax.cgstPercent) : fallbackTax.cgstPercent;
+        const previousSgst = existingTax ? Number(existingTax.sgstPercent) : fallbackTax.sgstPercent;
+        const nextCgst = body.cgstPercent != null ? Number(body.cgstPercent) : previousCgst;
+        const nextSgst = body.sgstPercent != null ? Number(body.sgstPercent) : previousSgst;
+        if (roundPercent(nextCgst + nextSgst) > 100) {
+          throw ApiError.badRequest('CGST and SGST together cannot exceed 100%', {
+            code: 'TAX_PERCENT_INVALID',
+          });
+        }
+        if (previousCgst !== nextCgst || previousSgst !== nextSgst) {
+          const tax = await tx.taxSetting.upsert({
+            where: { id: 1 },
+            create: {
+              id: 1,
+              cgstPercent: nextCgst,
+              sgstPercent: nextSgst,
+              updatedByAdminId: adminId,
+            },
+            update: {
+              cgstPercent: nextCgst,
+              sgstPercent: nextSgst,
+              updatedByAdminId: adminId,
+            },
+          });
+          taxChange = {
+            id: tax.id,
+            previousCgstPercent: previousCgst,
+            newCgstPercent: nextCgst,
+            previousSgstPercent: previousSgst,
+            newSgstPercent: nextSgst,
+          };
+          await tx.adminAuditLog.create({
+            data: {
+              adminId,
+              actionType: 'other',
+              targetEntityType: 'tax_settings',
+              targetEntityId: tax.id,
+              details: { ...taxChange, note },
+            },
+          });
+        }
+      }
+
       for (const { role, rate, crewSharePercent } of updates) {
         const existing = await tx.crewRateCard.findUnique({ where: { role } });
         const previousRate = existing ? Number(existing.rate) : DEFAULT_RATES[role];
@@ -170,6 +251,18 @@ class RateCardService {
         action: 'rate_updated',
         referenceEntityType: 'crew_rate_card',
         metadata: { changes, note },
+      });
+    }
+
+    if (taxChange) {
+      await activityLogService.record({
+        category: 'admin_action',
+        actorType: 'admin',
+        actorId: adminId,
+        action: 'tax_updated',
+        referenceEntityType: 'tax_settings',
+        referenceEntityId: taxChange.id,
+        metadata: { ...taxChange, note },
       });
     }
 

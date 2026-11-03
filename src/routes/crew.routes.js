@@ -3,7 +3,8 @@ import validate from '../middlewares/validate.js';
 import { authenticate, requireType } from '../middlewares/auth.js';
 import * as schema from '../validations/crew.validation.js';
 import * as bookingSchema from '../validations/crewBooking.validation.js';
-import { crewController, crewBookingController } from '../controllers/index.js';
+import * as notificationSchema from '../validations/notification.validation.js';
+import { crewController, crewBookingController, notificationController } from '../controllers/index.js';
 
 class CrewRoutes {
   constructor() {
@@ -40,6 +41,9 @@ class CrewRoutes {
     this.router.get('/complaints/orders', crewController.listComplaintOrders);
     this.router.get('/complaints', crewController.listComplaints);
     this.router.post('/complaints', validate(schema.createComplaint), crewController.createComplaint);
+
+    // --- Notifications ---
+    this.router.get('/notifications', validate(notificationSchema.listNotifications), notificationController.listForCrew);
 
     // --- Online/offline toggle ---
     this.router.patch('/me/online', validate(schema.setOnline), crewController.setOnline);

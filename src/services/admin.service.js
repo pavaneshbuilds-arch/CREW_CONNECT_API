@@ -801,6 +801,10 @@ class AdminService {
       venueLatitude: decimal(booking.venueLatitude),
       venueLongitude: decimal(booking.venueLongitude),
       subtotal: decimal(booking.subtotal),
+      cgstPercent: decimal(booking.cgstPercent),
+      sgstPercent: decimal(booking.sgstPercent),
+      cgstAmount: decimal(booking.cgstAmount),
+      sgstAmount: decimal(booking.sgstAmount),
       gstAmount: decimal(booking.gstAmount),
       discountAmount: decimal(booking.discountAmount),
       coupon: booking.coupon

@@ -90,7 +90,16 @@ class AdminController {
 
   updateRates = catchAsync(async (req, res) => {
     const data = await rateCardService.updateRates(req.auth.sub, req.body);
-    return success(res, data, { message: 'Rates updated' });
+    const ratesTouched =
+      req.body.waiter != null ||
+      req.body.supervisor != null ||
+      req.body.bouncer != null ||
+      req.body.crewSharePercent != null;
+    const taxTouched = req.body.cgstPercent != null || req.body.sgstPercent != null;
+    let message = 'Rates updated';
+    if (taxTouched && ratesTouched) message = 'Pricing updated';
+    else if (taxTouched) message = 'Tax rates updated';
+    return success(res, data, { message });
   });
 
   listRateLogs = catchAsync(async (req, res) => {

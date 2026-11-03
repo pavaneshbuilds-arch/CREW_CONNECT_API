@@ -384,6 +384,7 @@ model Admin {
   reviewedProfileEdits CrewProfileEditRequest[]
   rateCardsUpdated     CrewRateCard[]          @relation("CrewRateCardUpdatedBy")
   rateLogs             CrewRateLog[]           @relation("CrewRateLogChangedBy")
+  taxSettingsUpdated   TaxSetting[]            @relation("TaxSettingUpdatedBy")
 
   @@map("admins")
 }
@@ -444,6 +445,10 @@ model Booking {
   additionalInstructions String?       @map("additional_instructions")
   status                 BookingStatus @default(cart)
   subtotal               Decimal?      @db.Decimal(10, 2)
+  cgstPercent            Decimal?      @map("cgst_percent") @db.Decimal(5, 2)
+  sgstPercent            Decimal?      @map("sgst_percent") @db.Decimal(5, 2)
+  cgstAmount             Decimal?      @map("cgst_amount") @db.Decimal(10, 2)
+  sgstAmount             Decimal?      @map("sgst_amount") @db.Decimal(10, 2)
   gstAmount              Decimal?      @map("gst_amount") @db.Decimal(10, 2)
   discountAmount         Decimal?      @map("discount_amount") @db.Decimal(10, 2)
   estimatedTotal         Decimal?      @map("estimated_total") @db.Decimal(10, 2)
@@ -729,6 +734,20 @@ model CrewRateLog {
   @@index([role])
   @@index([createdAt])
   @@map("crew_rate_logs")
+}
+
+// Singleton (id = 1). CGST and SGST are each a percent of the booking subtotal.
+// gst on a booking is their sum, snapshotted when the cart is quoted.
+model TaxSetting {
+  id               Int      @id @default(1)
+  cgstPercent      Decimal  @default(9) @map("cgst_percent") @db.Decimal(5, 2)
+  sgstPercent      Decimal  @default(9) @map("sgst_percent") @db.Decimal(5, 2)
+  updatedByAdminId Int?     @map("updated_by_admin_id")
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy Admin? @relation("TaxSettingUpdatedBy", fields: [updatedByAdminId], references: [id])
+
+  @@map("tax_settings")
 }
 
 model SupervisorStaffingRange {

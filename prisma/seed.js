@@ -73,6 +73,17 @@ async function main() {
   }
   console.log('Seeded crew rate cards');
 
+  const gst = Number(process.env.GST_PERCENT ?? 18);
+  const safeGst = Number.isFinite(gst) ? gst : 18;
+  const cgstPercent = Math.round((safeGst / 2 + Number.EPSILON) * 100) / 100;
+  const sgstPercent = Math.round((safeGst - cgstPercent + Number.EPSILON) * 100) / 100;
+  await prisma.taxSetting.upsert({
+    where: { id: 1 },
+    update: {},
+    create: { id: 1, cgstPercent, sgstPercent },
+  });
+  console.log(`Seeded tax settings: CGST ${cgstPercent}% + SGST ${sgstPercent}%`);
+
   const rangeCount = await prisma.supervisorStaffingRange.count();
   if (!rangeCount) {
     await prisma.supervisorStaffingRange.createMany({

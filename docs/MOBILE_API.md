@@ -116,6 +116,7 @@ Use this to wire screens that already exist in design.
 | Mark dates off / vacation | `GET/POST/DELETE /crew/me/time-off` |
 | Emergency contacts | `GET/POST /crew/me/emergency-contacts`, `PATCH/DELETE /crew/me/emergency-contacts/:id` |
 | Complaint | `GET /crew/complaints/reasons` then `GET /crew/complaints/orders`, then `POST /crew/complaints` |
+| Notifications | `GET /crew/notifications` |
 | Account / Profile | `GET /crew/me` |
 | Edit Profile (while pending/rejected) | Same PATCH/PUT as onboarding |
 | Request Changes (after approved) | `POST /crew/me/edit-requests` |
@@ -126,9 +127,9 @@ Use this to wire screens that already exist in design.
 These crew screens **cannot** be fully wired yet:
 
 - Dashboard, All Earnings
-- In-app notification inbox (pushes are sent; there is no list endpoint yet)
+- Notification read / unread state. `GET /crew/notifications` lists notifications, but nothing marks them read yet
 
-User (organizer) app: **login + Google + profile + addresses + settings + bookings + five-star home quotes + top-rated crew**. Push notifications are sent for booking and crew events. A notification inbox endpoint is not implemented yet. The rest of the home catalog is not implemented yet.
+User (organizer) app: **login + Google + profile + addresses + settings + bookings + five-star home quotes + top-rated crew + notifications**. The rest of the home catalog is not implemented yet.
 
 ---
 
@@ -150,6 +151,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 | Account | `GET /users/me` |
 | Account details / Edit Profile | `PATCH /users/me` |
 | Settings | `PATCH /users/me` for `locationAccessEnabled`, `pushNotificationsEnabled`, `marketingOptIn` |
+| Notifications | `GET /users/notifications` |
 | Coupons | `GET /users/coupons` |
 | Help & Support | `GET /users/support` |
 | Home — What Our Clients Say | `GET /users/home/reviews` |
@@ -171,7 +173,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 ### Not in this API yet (do not block UI mock; backend next)
 
 - Home — flash sale, search, Choose Your Crew catalog. Client quotes are `GET /users/home/reviews`. Most Popular is `GET /users/home/top-crew`
-- Notification inbox (pushes are sent; there is no list endpoint yet)
+- Notification read / unread state. `GET /users/notifications` lists notifications, but nothing marks them read yet
 - CMS for About / FAQ / Privacy / Terms (deep-link static URLs)
 
 ---
@@ -438,6 +440,39 @@ There is no send endpoint. The API stores a `notifications` row, and the backgro
 | `profile_approved` / `profile_rejected` | Crew | Verification or a profile edit is reviewed |
 
 If the organizer turns off `pushNotificationsEnabled`, the row is still stored and the push is not sent. Crew accounts have no separate push toggle.
+
+### `GET /users/notifications` and `GET /crew/notifications`
+
+The notification list for the signed-in account, newest first. It includes every stored notification, including ones whose push was not sent (push turned off, or no registered device).
+
+**Auth:** Bearer. `/users/notifications` needs `type` `"user"`. `/crew/notifications` needs `type` `"crew"`.
+
+Query: `page` (default 1), `limit` (default 20, max 50).
+
+```json
+{
+  "data": [
+    {
+      "id": 104,
+      "type": "crew_on_the_way",
+      "title": "Shift started",
+      "body": "Maxwell D. (Waiter) started their shift for PC-48213.",
+      "screen": "booking_details",
+      "bookingId": 12,
+      "bookingReference": "PC-48213",
+      "crewId": 7,
+      "referenceEntityType": "booking",
+      "referenceEntityId": 12,
+      "createdAt": "2026-11-03T10:15:00.000Z"
+    }
+  ],
+  "meta": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
+}
+```
+
+`type`, `title`, `body`, and `screen` match the push. `id` is the push `notificationId`. Ids are numbers here, not strings. `screen`, `bookingId`, `bookingReference`, and `crewId` are `null` when they do not apply. `referenceEntityType` is `booking` or `crew_member`. On tap, route by `screen` the same way as a push tap.
+
+There is no read / unread state yet. Do not show unread badges or a mark-as-read action.
 
 ---
 
@@ -765,13 +800,14 @@ The cart holds **one** `cart` draft per user. That draft has no payment, so a ne
 Pricing is computed on the server (do not send rates or totals):
 
 - Line = `count × rate` (fixed amount per person for the event — hours are **not** multiplied)
-- GST **18%** on subtotal (before discount)
+- CGST and SGST are each a percent of subtotal (before discount). Defaults are **9% CGST** and **9% SGST**. An admin can change each percent on `PATCH /admin/rates`
+- `gstAmount` = `cgstAmount + sgstAmount`. `gstPercent` = `cgstPercent + sgstPercent`
 - Coupon discount (flat amount, or `%` of subtotal) subtracted after GST. Percentage discounts are capped at `maxDiscountAmount` when that field is set (e.g. 50% upto ₹1000)
 - `estimatedTotal` = `subtotal + gstAmount - discountAmount`
 
 `expectedDurationHours` is an input (1–24). It is stored and shown to crew on the order; it does not change the price. `GET /users/bookings/options` still returns `durations` as optional UI shortcuts (6 / 8 / 12).
 
-Fixed rates come from the admin rate card (`GET /admin/rates`). Defaults after seed: waiter **₹800**, supervisor **₹1000**, bouncer **₹900** per person per event. Rates are snapshotted onto the booking at quote time, so later admin edits do not change existing bookings. The crew share of each rate is stored on the booking at the same time and is not returned on organizer responses.
+Fixed rates come from the admin rate card (`GET /admin/rates`). Defaults after seed: waiter **₹800**, supervisor **₹1000**, bouncer **₹900** per person per event. Rates are snapshotted onto the booking at quote time, so later admin edits do not change existing bookings. CGST and SGST percents are snapshotted the same way (`cgstPercent`, `sgstPercent`, `cgstAmount`, `sgstAmount`). A later admin tax edit does not change an existing cart or order. The crew share of each rate is stored on the booking at the same time and is not returned on organizer responses.
 
 Cancellation: allowed while `confirmed` or `crew_assigned`. Hours are measured until the event start. More than **72 hours** → **100% refund**. **24 to 72 hours**, including exactly 24 and exactly 72 → **50% refund**. Less than **24 hours** → **no refund**. A refund greater than zero is sent through Razorpay to the original payment method. `within24Hours` means no refund.
 
@@ -790,6 +826,8 @@ Dropdowns and rate card for steps 1–2. `rates` are the fixed per-person event 
       { "hours": 12, "label": "Full Day" }
     ],
     "rates": { "waiter": 800, "supervisor": 1000, "bouncer": 900 },
+    "cgstPercent": 9,
+    "sgstPercent": 9,
     "gstPercent": 18,
     "coverRatio": 20,
     "supervisorRanges": [
@@ -910,6 +948,10 @@ Response (same shape as Cart). `rates` are the snapshotted per-person event amou
       }
     ],
     "subtotal": 5000,
+    "cgstPercent": 9,
+    "sgstPercent": 9,
+    "cgstAmount": 450,
+    "sgstAmount": 450,
     "gstPercent": 18,
     "gstAmount": 900,
     "discountAmount": 0,
@@ -928,7 +970,7 @@ Latest `cart` booking, or `data: null` if the cart is empty. A `created` checkou
 
 ### `POST /users/bookings/:id/coupon`
 
-Body `{ "code": "LUXURYLAUNCH" }`. Only `cart`. Recalculates discount, GST, and total.
+Body `{ "code": "LUXURYLAUNCH" }`. Only `cart`. Recalculates discount, CGST, SGST, and total using the tax percents already snapshotted on the cart.
 
 **400** `COUPON_INVALID` (unknown / inactive / expired), `COUPON_MIN_SPEND`, `COUPON_LIMIT_REACHED` (global `maxUses` exhausted), `COUPON_USER_LIMIT` (`maxUsesPerUser`, including one-time-use). Payment order and payment verify re-check the same rules before confirming.
 
@@ -1683,6 +1725,8 @@ GET /crew/me
       Pick order → GET /crew/complaints/orders
       Images → POST /uploads (purpose=complaint_image), up to 5
       Submit → POST /crew/complaints { bookingId, reason, details, imageUrls }
+    Notifications → GET /crew/notifications?page=1&limit=20
+      tap → route by screen (job_details → GET /crew/bookings/:bookingId, profile → GET /crew/me)
     Account → GET /crew/me
     Logout → POST /auth/logout
 ```
@@ -1718,6 +1762,8 @@ GET /users/me  (or login payload)
     Most Popular → GET /users/home/top-crew?role=waiter|supervisor|bouncer
       top 5 by completed jobs. ratingAvg is always 5. completedJobs may be 0.
 
+Notifications → GET /users/notifications?page=1&limit=20
+  tap → booking_details → GET /users/bookings/:bookingId
 Account → GET /users/me
 Edit Profile → PATCH /users/me
 Addresses → GET/POST/PATCH/DELETE /users/me/addresses
@@ -1769,6 +1815,7 @@ Delete Account → DELETE /users/me
 - [ ] Persist `accessToken` + `refreshToken`; attach Bearer on all `/users/*`, `/crew/*`, and `/auth/devices` / `/auth/me`
 - [ ] Refresh on 401, then retry
 - [ ] After login, register `mid` + `pnid`. `pnid` is the FCM token. On tap, open `data.screen` (`booking_details`, `job_details`, `profile`) using `data.bookingId` when it is present. Organizer pushes follow `pushNotificationsEnabled`
+- [ ] Notification list: `GET /users/notifications` (user app) or `GET /crew/notifications` (crew app), paged with `page` / `limit`. Items use the same `screen` routing as a push tap. There is no unread state yet
 - [ ] User Home quotes: `GET /users/home/reviews` (five-star written reviews only; `fullName` and `profilePhotoUrl`, no job title)
 - [ ] User Home Most Popular: `GET /users/home/top-crew?role=` (`waiter`, `supervisor`, or `bouncer`). Top 5 by completed jobs. `ratingAvg` is always `5`. `completedJobs` may be `0`
 - [ ] Google users: if `phoneVerified === false`, verify a real phone via OTP before treating the number as set
@@ -1780,6 +1827,7 @@ Delete Account → DELETE /users/me
 - [ ] For emulator, point `PUBLIC_BASE_URL` at `http://10.0.2.2:4000` so image URLs load
 - [ ] Do not display full Aadhaar / account number (API will not return them)
 - [ ] Booking cart is a single `cart` draft with no payment; `PUT /users/bookings/summary` creates and replaces only that draft. A `created` checkout is listed with `GET /users/bookings?tab=all`
+- [ ] Quote screen shows CGST and SGST separately (`cgstPercent` / `cgstAmount`, `sgstPercent` / `sgstAmount`). `gstAmount` is their sum. Do not send tax from the app; it is snapshotted when the cart is saved
 - [ ] Venue picker: `GET /users/places/search?q=` then copy `name` / `address` / `latitude` / `longitude` into summary. Warn if `inServiceArea` is false
 - [ ] Pay with `POST /users/bookings/:id/payment-order`, open Razorpay Checkout using `keyId` / `orderId` / `amount` (paise), then `POST /users/bookings/:id/payment-verify`. Do not ship the Razorpay key secret in the app. Do not start checkout again while `paymentStatus` is `initiated` or `processing`. If verify never returns, read All Bookings or the booking detail — the webhook may already have confirmed it
 - [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.

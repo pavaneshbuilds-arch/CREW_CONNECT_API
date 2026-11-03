@@ -120,7 +120,54 @@ async function scheduleReminders(booking, recipientType, recipientId) {
   });
 }
 
+function optionalInt(value) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+function serializeNotification(row) {
+  const extra = row.data && typeof row.data === 'object' ? row.data : {};
+  return {
+    id: row.id,
+    type: row.type,
+    title: row.title,
+    body: row.body,
+    screen: extra.screen ?? null,
+    bookingId: optionalInt(extra.bookingId),
+    bookingReference: extra.bookingReference ?? null,
+    crewId: optionalInt(extra.crewId),
+    referenceEntityType: row.referenceEntityType,
+    referenceEntityId: row.referenceEntityId,
+    createdAt: row.createdAt,
+  };
+}
+
 class NotificationService {
+  async listForRecipient(recipientType, recipientId, query = {}) {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const where = { recipientType, recipientId };
+    const [total, rows] = await prisma.$transaction([
+      prisma.notification.count({ where }),
+      prisma.notification.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+    return {
+      items: rows.map(serializeNotification),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
+  }
+
   async onBookingConfirmed(bookingId) {
     await safe('booking_confirmed', async () => {
       const booking = await prisma.booking.findUnique({

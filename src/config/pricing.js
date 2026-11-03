@@ -68,8 +68,22 @@ export const ROLE_REQUIREMENTS = {
   ],
 };
 
+export function roundPercent(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+/** Fallback split of GST_PERCENT when tax_settings has no row yet. */
+export function defaultTaxSplit() {
+  const gst = Number(config.pricing.gstPercent);
+  const safe = Number.isFinite(gst) ? gst : 18;
+  const cgstPercent = roundPercent(safe / 2);
+  const sgstPercent = roundPercent(safe - cgstPercent);
+  return { cgstPercent, sgstPercent };
+}
+
 export function getGstPercent() {
-  return config.pricing.gstPercent;
+  const { cgstPercent, sgstPercent } = defaultTaxSplit();
+  return roundPercent(cgstPercent + sgstPercent);
 }
 
 export const DEFAULT_SUPERVISOR_RANGES = [

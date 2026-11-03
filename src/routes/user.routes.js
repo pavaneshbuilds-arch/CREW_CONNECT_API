@@ -4,7 +4,8 @@ import { authenticate, requireType } from '../middlewares/auth.js';
 import { placesLimiter } from '../middlewares/rateLimiter.js';
 import * as schema from '../validations/user.validation.js';
 import * as bookingSchema from '../validations/booking.validation.js';
-import { userController, bookingController } from '../controllers/index.js';
+import * as notificationSchema from '../validations/notification.validation.js';
+import { userController, bookingController, notificationController } from '../controllers/index.js';
 
 class UserRoutes {
   constructor() {
@@ -23,6 +24,8 @@ class UserRoutes {
     this.router.post('/me/addresses', validate(schema.createAddress), userController.createAddress);
     this.router.patch('/me/addresses/:id', validate(schema.updateAddress), userController.updateAddress);
     this.router.delete('/me/addresses/:id', validate(schema.addressParam), userController.deleteAddress);
+
+    this.router.get('/notifications', validate(notificationSchema.listNotifications), notificationController.listForUser);
 
     this.router.get('/coupons', userController.listCoupons);
     this.router.get('/support', userController.getSupport);

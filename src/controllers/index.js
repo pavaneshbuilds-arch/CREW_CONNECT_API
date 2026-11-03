@@ -5,6 +5,7 @@ export { default as bookingController } from './booking.controller.js';
 export { default as crewController } from './crew.controller.js';
 export { default as crewBookingController } from './crewBooking.controller.js';
 export { default as deviceController } from './device.controller.js';
+export { default as notificationController } from './notification.controller.js';
 export { default as uploadController } from './upload.controller.js';
 export { default as adminController } from './admin.controller.js';
 export { default as paymentController } from './payment.controller.js';

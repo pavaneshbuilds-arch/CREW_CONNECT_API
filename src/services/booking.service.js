@@ -9,7 +9,8 @@ import {
   EVENT_TYPES,
   FOOD_SERVICE_TYPES,
   ROLE_LABELS,
-  getGstPercent,
+  defaultTaxSplit,
+  roundPercent,
   suggestCrew,
   splitWaiterQuotas,
   supervisorCountForWaiters,
@@ -254,13 +255,54 @@ function buildLineItems({ crewCounts, rates }) {
   });
 }
 
-function computeTotals(lineItems, coupon) {
+function computeTotals(lineItems, coupon, tax) {
   const subtotal = roundMoney(lineItems.reduce((sum, item) => sum + item.amount, 0));
-  const gstPercent = getGstPercent();
-  const gstAmount = roundMoney(subtotal * (gstPercent / 100));
+  const cgstPercent = roundPercent(tax.cgstPercent);
+  const sgstPercent = roundPercent(tax.sgstPercent);
+  const cgstAmount = roundMoney(subtotal * (cgstPercent / 100));
+  const sgstAmount = roundMoney(subtotal * (sgstPercent / 100));
+  const gstPercent = roundPercent(cgstPercent + sgstPercent);
+  const gstAmount = roundMoney(cgstAmount + sgstAmount);
   const discountAmount = couponService.computeDiscountAmount(subtotal, coupon);
   const estimatedTotal = roundMoney(Math.max(0, subtotal + gstAmount - discountAmount));
-  return { subtotal, gstPercent, gstAmount, discountAmount, estimatedTotal };
+  return {
+    subtotal,
+    cgstPercent,
+    sgstPercent,
+    cgstAmount,
+    sgstAmount,
+    gstPercent,
+    gstAmount,
+    discountAmount,
+    estimatedTotal,
+  };
+}
+
+function taxFromBooking(booking) {
+  const fallback = defaultTaxSplit();
+  return {
+    cgstPercent: booking.cgstPercent != null ? decimal(booking.cgstPercent) : fallback.cgstPercent,
+    sgstPercent: booking.sgstPercent != null ? decimal(booking.sgstPercent) : fallback.sgstPercent,
+  };
+}
+
+function storedTax(booking) {
+  const tax = taxFromBooking(booking);
+  const gstAmount = decimal(booking.gstAmount);
+  let cgstAmount = decimal(booking.cgstAmount);
+  let sgstAmount = decimal(booking.sgstAmount);
+  if (cgstAmount == null && sgstAmount == null && gstAmount != null) {
+    cgstAmount = roundMoney(gstAmount / 2);
+    sgstAmount = roundMoney(gstAmount - cgstAmount);
+  }
+  return {
+    cgstPercent: tax.cgstPercent,
+    sgstPercent: tax.sgstPercent,
+    cgstAmount,
+    sgstAmount,
+    gstPercent: roundPercent(tax.cgstPercent + tax.sgstPercent),
+    gstAmount,
+  };
 }
 
 function serializeCoupon(coupon) {
@@ -312,8 +354,7 @@ function serializeCostBreakdown(booking) {
     rates,
     lineItems,
     subtotal: decimal(booking.subtotal),
-    gstPercent: getGstPercent(),
-    gstAmount: decimal(booking.gstAmount),
+    ...storedTax(booking),
     discountAmount: decimal(booking.discountAmount),
     estimatedTotal: decimal(booking.estimatedTotal),
     coupon: serializeCoupon(booking.coupon),
@@ -831,14 +872,15 @@ async function quoteFromCounts(crewCounts, coupon) {
   if (!lineItems.length) {
     throw ApiError.badRequest('Select at least one crew member', { code: 'CREW_REQUIRED' });
   }
-  return { rates, crewSharePercents, lineItems, ...computeTotals(lineItems, coupon) };
+  const tax = await rateCardService.getTaxRates();
+  return { rates, crewSharePercents, lineItems, ...computeTotals(lineItems, coupon, tax) };
 }
 
 function quoteFromBooking(booking, coupon) {
   const crewCounts = crewCountsFromRequirements(booking.crewRequirements);
   const rates = ratesFromRequirements(booking.crewRequirements);
   const lineItems = buildLineItems({ crewCounts, rates });
-  return { lineItems, ...computeTotals(lineItems, coupon) };
+  return { lineItems, ...computeTotals(lineItems, coupon, taxFromBooking(booking)) };
 }
 
 async function persistSupervisorSlots(tx, booking) {
@@ -979,16 +1021,19 @@ async function persistRequirements(tx, bookingId, crewCounts, rates, crewSharePe
 
 class BookingService {
   async getOptions() {
-    const [rates, supervisorRanges] = await Promise.all([
+    const [rates, supervisorRanges, tax] = await Promise.all([
       rateCardService.getRates(),
       supervisorRangeService.list(),
+      rateCardService.getTaxRates(),
     ]);
     return {
       eventTypes: EVENT_TYPES,
       foodServiceTypes: FOOD_SERVICE_TYPES,
       durations: DURATION_PRESETS,
       rates,
-      gstPercent: getGstPercent(),
+      cgstPercent: tax.cgstPercent,
+      sgstPercent: tax.sgstPercent,
+      gstPercent: roundPercent(tax.cgstPercent + tax.sgstPercent),
       coverRatio: COVER_RATIO,
       supervisorRanges,
       cancellationPolicy: cancellationPolicyPayload(),
@@ -1074,6 +1119,10 @@ class BookingService {
       additionalInstructions: blankToNull(body.additionalInstructions) ?? null,
       couponId: coupon?.id ?? null,
       subtotal: totals.subtotal,
+      cgstPercent: totals.cgstPercent,
+      sgstPercent: totals.sgstPercent,
+      cgstAmount: totals.cgstAmount,
+      sgstAmount: totals.sgstAmount,
       gstAmount: totals.gstAmount,
       discountAmount: totals.discountAmount,
       estimatedTotal: totals.estimatedTotal,
@@ -1143,6 +1192,10 @@ class BookingService {
       data: {
         couponId: coupon.id,
         subtotal: quote.subtotal,
+        cgstPercent: quote.cgstPercent,
+        sgstPercent: quote.sgstPercent,
+        cgstAmount: quote.cgstAmount,
+        sgstAmount: quote.sgstAmount,
         gstAmount: quote.gstAmount,
         discountAmount: quote.discountAmount,
         estimatedTotal: quote.estimatedTotal,
@@ -1167,6 +1220,10 @@ class BookingService {
       data: {
         couponId: null,
         subtotal: quote.subtotal,
+        cgstPercent: quote.cgstPercent,
+        sgstPercent: quote.sgstPercent,
+        cgstAmount: quote.cgstAmount,
+        sgstAmount: quote.sgstAmount,
         gstAmount: quote.gstAmount,
         discountAmount: quote.discountAmount,
         estimatedTotal: quote.estimatedTotal,
