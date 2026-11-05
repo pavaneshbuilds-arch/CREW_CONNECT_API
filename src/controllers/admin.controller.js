@@ -1,6 +1,12 @@
 import catchAsync from '../utils/catchAsync.js';
 import { success, created } from '../utils/apiResponse.js';
-import { adminService, couponService, rateCardService, supervisorRangeService } from '../services/index.js';
+import {
+  adminAssignmentService,
+  adminService,
+  couponService,
+  rateCardService,
+  supervisorRangeService,
+} from '../services/index.js';
 
 class AdminController {
   me = catchAsync(async (req, res) => {
@@ -81,6 +87,24 @@ class AdminController {
   getBooking = catchAsync(async (req, res) => {
     const data = await adminService.getBooking(req.params.id);
     return success(res, data);
+  });
+
+  listAvailableCrew = catchAsync(async (req, res) => {
+    const { items, meta } = await adminAssignmentService.listAvailable(req.params.id, req.query);
+    return success(res, items, { meta });
+  });
+
+  assignCrew = catchAsync(async (req, res) => {
+    await adminAssignmentService.assign(req.params.id, req.auth.sub, req.body);
+    const data = await adminService.getBooking(req.params.id);
+    const message = req.body.replacesAssignmentId ? 'Replacement assigned' : 'Crew assigned';
+    return success(res, data, { message });
+  });
+
+  markNoShow = catchAsync(async (req, res) => {
+    await adminAssignmentService.markNoShow(req.params.id, req.params.assignmentId, req.auth.sub);
+    const data = await adminService.getBooking(req.params.id);
+    return success(res, data, { message: 'Marked as no-show' });
   });
 
   listRates = catchAsync(async (req, res) => {

@@ -8,7 +8,7 @@ import ApiError from '../utils/apiError.js';
 import { generateOtp } from '../utils/otp.js';
 import { activityLogService, notificationService, smsService } from './index.js';
 
-const SLOT_STATUSES = ['assigned', 'confirmed', 'in_progress', 'completed'];
+export const SLOT_STATUSES = ['assigned', 'confirmed', 'in_progress', 'completed'];
 const OPEN_BOOKING_STATUSES = ['confirmed'];
 const UPCOMING_ASSIGNMENT_STATUSES = ['assigned', 'confirmed'];
 const CREW_JOB_INCLUDE = {
@@ -121,7 +121,7 @@ function filledCountForRole(booking, role) {
   ).length;
 }
 
-function openSlotsForRole(booking, role) {
+export function openSlotsForRole(booking, role) {
   const requirement = requirementForRole(booking, role);
   if (!requirement) return 0;
   return Math.max(0, requirement.countRequired - filledCountForRole(booking, role));
@@ -299,6 +299,81 @@ async function claimSlotForSupervisor(tx, bookingId, supervisorAssignmentId) {
     data: { supervisorAssignmentId },
   });
   await attachWaitersToSupervisor(tx, bookingId, supervisorAssignmentId, slot.waiterQuota);
+}
+
+/**
+ * Creates a confirmed assignment, blocks the event date, attaches supervisor
+ * slots the same way self-accept does, and promotes a confirmed booking to
+ * crew_assigned once every paid role is full. `booking.assignments` may include
+ * non-slot rows; only slot statuses count toward the fill.
+ */
+export async function createConfirmedAssignment(tx, {
+  booking,
+  crewId,
+  role,
+  assignmentMethod,
+  assignedByAdminId = null,
+  replacesAssignmentId = null,
+  duplicateMessage = 'You have already accepted this job',
+  duplicateCode = 'JOB_ALREADY_ACCEPTED',
+  dateBlockedMessage = 'You already have a job on this date',
+}) {
+  try {
+    const created = await tx.eventCrewAssignment.create({
+      data: {
+        bookingId: booking.id,
+        crewId,
+        role,
+        assignmentMethod,
+        status: 'confirmed',
+        ...(assignedByAdminId ? { assignedByAdminId } : {}),
+        ...(replacesAssignmentId ? { replacesAssignmentId } : {}),
+      },
+    });
+
+    if (booking.eventDate) {
+      try {
+        await tx.crewDateBlock.create({
+          data: {
+            crewId,
+            blockedDate: booking.eventDate,
+            eventAssignmentId: created.id,
+          },
+        });
+      } catch (err) {
+        if (err?.code === 'P2002') {
+          throw ApiError.conflict(dateBlockedMessage, { code: 'DATE_BLOCKED' });
+        }
+        throw err;
+      }
+    }
+
+    if (created.role === 'supervisor') {
+      await claimSlotForSupervisor(tx, booking.id, created.id);
+    } else if (created.role === 'waiter') {
+      await attachWaiterToOpenSlot(tx, booking.id, created.id);
+    }
+
+    const nextAssignments = [...(booking.assignments || []), created];
+    const filled = { ...booking, assignments: nextAssignments };
+    if (allRolesFilled(filled) && booking.status === 'confirmed') {
+      await tx.booking.update({
+        where: { id: booking.id },
+        data: { status: 'crew_assigned' },
+      });
+    }
+    return created;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (err?.code === 'P2002') {
+      const target = Array.isArray(err.meta?.target) ? err.meta.target.join(' ') : String(err.meta?.target || '');
+      if (target.includes('replaces')) {
+        throw ApiError.conflict('This no-show already has a replacement', { code: 'ALREADY_REPLACED' });
+      }
+      throw ApiError.conflict(duplicateMessage, { code: duplicateCode });
+    }
+    throw err;
+  }
 }
 
 async function attachWaiterToOpenSlot(tx, bookingId, waiterAssignmentId) {
@@ -832,55 +907,12 @@ class CrewBookingService {
         }
       }
 
-      try {
-        const created = await tx.eventCrewAssignment.create({
-          data: {
-            bookingId: booking.id,
-            crewId: crew.id,
-            role: crew.primaryRole,
-            assignmentMethod: 'self_assigned',
-            status: 'confirmed',
-          },
-        });
-
-        if (booking.eventDate) {
-          try {
-            await tx.crewDateBlock.create({
-              data: {
-                crewId: crew.id,
-                blockedDate: booking.eventDate,
-                eventAssignmentId: created.id,
-              },
-            });
-          } catch (err) {
-            if (err?.code === 'P2002') {
-              throw ApiError.conflict('You already have a job on this date', { code: 'DATE_BLOCKED' });
-            }
-            throw err;
-          }
-        }
-
-        if (created.role === 'supervisor') {
-          await claimSlotForSupervisor(tx, booking.id, created.id);
-        } else if (created.role === 'waiter') {
-          await attachWaiterToOpenSlot(tx, booking.id, created.id);
-        }
-
-        const nextAssignments = [...booking.assignments, created];
-        const filled = { ...booking, assignments: nextAssignments };
-        if (allRolesFilled(filled) && booking.status === 'confirmed') {
-          await tx.booking.update({
-            where: { id: booking.id },
-            data: { status: 'crew_assigned' },
-          });
-        }
-        return created;
-      } catch (err) {
-        if (err?.code === 'P2002') {
-          throw ApiError.conflict('You have already accepted this job', { code: 'JOB_ALREADY_ACCEPTED' });
-        }
-        throw err;
-      }
+      return createConfirmedAssignment(tx, {
+        booking,
+        crewId: crew.id,
+        role: crew.primaryRole,
+        assignmentMethod: 'self_assigned',
+      });
     });
 
     await activityLogService.record({

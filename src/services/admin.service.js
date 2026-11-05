@@ -138,6 +138,8 @@ function serializeCrewDetail(crew) {
     })),
     pendingEditRequests: (crew.profileEditRequests || []).length,
     assignmentCount: crew._count?.assignments ?? 0,
+    noShowCount: crew.noShowCount ?? 0,
+    replacementCount: crew.replacementCount ?? 0,
   };
 }
 
@@ -266,20 +268,24 @@ class AdminService {
   }
 
   async getCrew(id) {
-    const crew = await prisma.crewMember.findUnique({
-      where: { id },
-      include: {
-        languages: true,
-        skills: true,
-        identityDocuments: true,
-        bankDetails: true,
-        timeOff: { orderBy: { startDate: 'asc' } },
-        profileEditRequests: { where: { status: 'pending' }, select: { id: true } },
-        _count: { select: { assignments: true } },
-      },
-    });
+    const [crew, noShowCount, replacementCount] = await Promise.all([
+      prisma.crewMember.findUnique({
+        where: { id },
+        include: {
+          languages: true,
+          skills: true,
+          identityDocuments: true,
+          bankDetails: true,
+          timeOff: { orderBy: { startDate: 'asc' } },
+          profileEditRequests: { where: { status: 'pending' }, select: { id: true } },
+          _count: { select: { assignments: true } },
+        },
+      }),
+      prisma.eventCrewAssignment.count({ where: { crewId: id, status: 'no_show' } }),
+      prisma.eventCrewAssignment.count({ where: { crewId: id, assignmentMethod: 'replacement' } }),
+    ]);
     if (!crew || crew.deletedAt) throw ApiError.notFound('Crew profile not found', { code: 'CREW_NOT_FOUND' });
-    return serializeCrewDetail(crew);
+    return serializeCrewDetail({ ...crew, noShowCount, replacementCount });
   }
 
   async approveCrew(id, adminId) {
@@ -783,6 +789,13 @@ class AdminService {
               },
             },
             assignedByAdmin: { select: { id: true, fullName: true, email: true } },
+            replaces: {
+              select: {
+                id: true,
+                crewId: true,
+                crew: { select: { fullName: true } },
+              },
+            },
           },
           orderBy: { createdAt: 'desc' },
         },
@@ -848,6 +861,14 @@ class AdminService {
         createdAt: a.createdAt,
         crew: a.crew,
         assignedByAdmin: a.assignedByAdmin,
+        replacesAssignmentId: a.replacesAssignmentId,
+        replaces: a.replaces
+          ? {
+              id: a.replaces.id,
+              crewId: a.replaces.crewId,
+              fullName: a.replaces.crew?.fullName || null,
+            }
+          : null,
       })),
       payments: booking.payments.map((p) => ({
         id: p.id,

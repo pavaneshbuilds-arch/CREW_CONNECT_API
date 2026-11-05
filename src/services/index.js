@@ -22,4 +22,5 @@ export { default as bookingService } from './booking.service.js';
 export { default as crewComplaintService } from './crewComplaint.service.js';
 export { default as crewService } from './crew.service.js';
 export { default as crewBookingService } from './crewBooking.service.js';
+export { default as adminAssignmentService } from './adminAssignment.service.js';
 export { default as adminService } from './admin.service.js';

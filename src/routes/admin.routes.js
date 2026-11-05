@@ -35,6 +35,13 @@ class AdminRoutes {
     this.router.patch('/users/:id/active', validate(schema.setActive), adminController.setUserActive);
 
     this.router.get('/bookings', validate(schema.listBookings), adminController.listBookings);
+    this.router.get('/bookings/:id/available-crew', validate(schema.listAvailableCrew), adminController.listAvailableCrew);
+    this.router.post('/bookings/:id/assignments', validate(schema.assignCrew), adminController.assignCrew);
+    this.router.post(
+      '/bookings/:id/assignments/:assignmentId/no-show',
+      validate(schema.noShowAssignment),
+      adminController.markNoShow
+    );
     this.router.get('/bookings/:id', validate(schema.idParam), adminController.getBooking);
 
     this.router.get('/rates/logs', validate(schema.listRateLogs), adminController.listRateLogs);

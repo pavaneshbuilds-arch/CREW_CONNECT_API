@@ -360,6 +360,44 @@ class NotificationService {
     });
   }
 
+  async onAdminAssigned(bookingId, crewId) {
+    await this.onJobAccepted(bookingId, crewId);
+    await safe('admin_assigned', async () => {
+      const booking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+        select: {
+          id: true,
+          bookingReference: true,
+          eventType: true,
+          venueName: true,
+          venueAddress: true,
+          status: true,
+        },
+      });
+      if (!booking || booking.status === 'cancelled') return;
+      const where = {
+        recipientType: 'crew',
+        recipientId: crewId,
+        type: 'crew_assigned',
+        referenceEntityType: 'booking',
+        referenceEntityId: booking.id,
+      };
+      if (await alreadyNotified(where)) return;
+      await insertRows([
+        notificationRow({
+          ...where,
+          title: 'You are assigned',
+          body: `You have been assigned to ${refLabel(booking)} at ${placeLabel(booking)}. The job is already accepted for you.`,
+          data: {
+            bookingId: booking.id,
+            bookingReference: booking.bookingReference,
+            screen: 'job_details',
+          },
+        }),
+      ]);
+    });
+  }
+
   async onShiftStarted(bookingId, crewId) {
     await safe('shift_started', async () => {
       const [booking, crew] = await Promise.all([

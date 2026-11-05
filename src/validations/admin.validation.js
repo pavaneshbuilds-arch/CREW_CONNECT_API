@@ -66,6 +66,35 @@ export const listUsers = {
   }),
 };
 
+export const listAvailableCrew = {
+  params: Joi.object({
+    id: Joi.number().integer().positive().required(),
+  }),
+  query: Joi.object({
+    ...pagination,
+    role: Joi.string().valid('waiter', 'supervisor', 'bouncer').required(),
+    search: Joi.string().max(150).allow(''),
+  }),
+};
+
+export const assignCrew = {
+  params: Joi.object({
+    id: Joi.number().integer().positive().required(),
+  }),
+  body: Joi.object({
+    crewId: Joi.number().integer().positive().required(),
+    role: Joi.string().valid('waiter', 'supervisor', 'bouncer').required(),
+    replacesAssignmentId: Joi.number().integer().positive(),
+  }),
+};
+
+export const noShowAssignment = {
+  params: Joi.object({
+    id: Joi.number().integer().positive().required(),
+    assignmentId: Joi.number().integer().positive().required(),
+  }),
+};
+
 export const listBookings = {
   query: Joi.object({
     ...pagination,
@@ -101,6 +130,7 @@ export const listAuditLogs = {
       'coupon_created',
       'coupon_updated',
       'coupon_deleted',
+      'crew_marked_no_show',
       'other'
     ),
     adminId: Joi.number().integer().positive(),

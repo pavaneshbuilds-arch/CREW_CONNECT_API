@@ -70,6 +70,7 @@ enum BookingStatus {
 enum AssignmentMethod {
   self_assigned
   admin_assigned
+  replacement
 }
 
 enum AssignmentStatus {
@@ -125,6 +126,7 @@ enum AuditActionType {
   crew_assigned_manually
   crew_reassigned
   crew_removed
+  crew_marked_no_show
   profile_edit_approved
   profile_edit_rejected
   rate_updated
@@ -513,6 +515,7 @@ model EventCrewAssignment {
   shiftOtp                 String?          @map("shift_otp") @db.VarChar(4)
   shiftOtpIssuedAt         DateTime?        @map("shift_otp_issued_at") @db.Timestamptz(6)
   reportsToAssignmentId    Int?             @map("reports_to_assignment_id")
+  replacesAssignmentId     Int?             @unique @map("replaces_assignment_id")
   earningsAmount           Decimal?         @map("earnings_amount") @db.Decimal(10, 2)
   performanceBonus         Decimal          @default(0) @map("performance_bonus") @db.Decimal(10, 2)
   reopenedForReassignment  Boolean          @default(false) @map("reopened_for_reassignment")
@@ -524,6 +527,8 @@ model EventCrewAssignment {
   assignedByAdmin    Admin?                  @relation(fields: [assignedByAdminId], references: [id])
   reportsTo          EventCrewAssignment?    @relation("WaiterTeam", fields: [reportsToAssignmentId], references: [id], onDelete: SetNull)
   teamWaiters        EventCrewAssignment[]   @relation("WaiterTeam")
+  replaces           EventCrewAssignment?    @relation("AssignmentReplacement", fields: [replacesAssignmentId], references: [id], onDelete: SetNull)
+  replacedBy         EventCrewAssignment?    @relation("AssignmentReplacement")
   supervisorSlot     BookingSupervisorSlot?
   dateBlocks         CrewDateBlock[]
   walletTransactions WalletTransaction[]
