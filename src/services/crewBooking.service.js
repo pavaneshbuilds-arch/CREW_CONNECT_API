@@ -135,7 +135,8 @@ function allRolesFilled(booking) {
   return (booking.crewRequirements || []).every((row) => openSlotsForRole(booking, row.role) === 0);
 }
 
-function crewJobStatus(booking, assignment) {
+function crewJobStatus(booking, assignment, { rejected = false } = {}) {
+  if (!assignment && rejected) return 'rejected';
   if (booking.status === 'cancelled') return 'cancelled';
   if (!assignment) return 'new_request';
   if (assignment.status === 'in_progress') return 'in_progress';
@@ -155,6 +156,8 @@ function requestStatusLabel(status) {
       return 'COMPLETED';
     case 'cancelled':
       return 'CANCELLED';
+    case 'rejected':
+      return 'REJECTED';
     default:
       return String(status).replaceAll('_', ' ').toUpperCase();
   }
@@ -400,12 +403,12 @@ async function attachWaiterToOpenSlot(tx, bookingId, waiterAssignmentId) {
   }
 }
 
-function serializeListItem(booking, { role, coords, assignment = null } = {}) {
+function serializeListItem(booking, { role, coords, assignment = null, rejected = false } = {}) {
   const pay = payForRole(booking, role);
   const eventDate = dateToIsoDate(booking.eventDate);
   const startTime = dateToTimeString(booking.eventStartTime);
   const hours = decimal(booking.expectedDurationHours);
-  const status = crewJobStatus(booking, assignment);
+  const status = crewJobStatus(booking, assignment, { rejected });
   const roleCount = requirementForRole(booking, role)?.countRequired || 0;
   const totalStaff = staffCount(booking);
 
@@ -449,9 +452,9 @@ function performanceQuote(rating) {
   return null;
 }
 
-function serializeDetails(booking, { crew, assignment, coords }) {
+function serializeDetails(booking, { crew, assignment, coords, rejected = false }) {
   const role = assignment?.role || crew.primaryRole;
-  const item = serializeListItem(booking, { role, coords, assignment });
+  const item = serializeListItem(booking, { role, coords, assignment, rejected });
   const pay = item.pay;
   const status = item.status;
   const now = new Date();
@@ -488,7 +491,8 @@ function serializeDetails(booking, { crew, assignment, coords }) {
       : formatDuration(booking.expectedDurationHours);
 
   const otpIssued = Boolean(assignment?.shiftOtp) || Boolean(startedAt);
-  const canAccept = status === 'new_request' && booking.status === 'confirmed';
+  const slotOpen = booking.status === 'confirmed' && openSlotsForRole(booking, role) >= 1;
+  const canAccept = (status === 'new_request' || status === 'rejected') && slotOpen;
   const canReject = status === 'new_request';
   const canStartShift = status === 'accepted' && booking.status !== 'cancelled' && otpIssued;
   const canComplete = status === 'in_progress';
@@ -597,10 +601,7 @@ async function loadBooking(bookingId, include = CREW_JOB_INCLUDE) {
 }
 
 function assertVisibleToCrew(booking, crew, assignment, rejected) {
-  if (assignment) return;
-  if (rejected) {
-    throw ApiError.notFound('Booking not found', { code: 'BOOKING_NOT_FOUND' });
-  }
+  if (assignment || rejected) return;
   if (!OPEN_BOOKING_STATUSES.includes(booking.status) || openSlotsForRole(booking, crew.primaryRole) < 1) {
     throw ApiError.notFound('Booking not found', { code: 'BOOKING_NOT_FOUND' });
   }
@@ -657,6 +658,43 @@ async function listOpenRequests(crew, { coords } = {}) {
     });
   }
   return open;
+}
+
+async function listRejected(crew, { coords } = {}) {
+  const [rejections, timeOffRows, dateBlocks] = await Promise.all([
+    prisma.crewJobRejection.findMany({
+      where: { crewId: crew.id },
+      select: { bookingId: true },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.crewTimeOff.findMany({ where: { crewId: crew.id }, select: { startDate: true, endDate: true } }),
+    prisma.crewDateBlock.findMany({ where: { crewId: crew.id }, select: { blockedDate: true } }),
+  ]);
+  if (!rejections.length) return [];
+
+  const today = parseDateOnly(todayYmd());
+  const bookings = await prisma.booking.findMany({
+    where: {
+      id: { in: rejections.map((row) => row.bookingId) },
+      status: { in: OPEN_BOOKING_STATUSES },
+      eventDate: { gte: today },
+      crewRequirements: { some: { role: crew.primaryRole, countRequired: { gt: 0 } } },
+    },
+    include: CREW_JOB_INCLUDE,
+  });
+  const byId = new Map(bookings.map((booking) => [booking.id, booking]));
+  const blockedDates = new Set(dateBlocks.map((row) => dateToIsoDate(row.blockedDate)));
+
+  const items = [];
+  for (const rejection of rejections) {
+    const booking = byId.get(rejection.bookingId);
+    if (!booking) continue;
+    if (openSlotsForRole(booking, crew.primaryRole) < 1) continue;
+    if (isOnTimeOff(timeOffRows, booking.eventDate)) continue;
+    if (blockedDates.has(dateToIsoDate(booking.eventDate))) continue;
+    items.push(serializeListItem(booking, { role: crew.primaryRole, coords, rejected: true }));
+  }
+  return items;
 }
 
 async function listMine(crew, { tab, coords }) {
@@ -722,6 +760,9 @@ async function listByStatuses(crew, { statuses, coords }) {
   if (wanted.includes('new_request')) {
     items.push(...(await listOpenRequests(crew, { coords })));
   }
+  if (wanted.includes('rejected')) {
+    items.push(...(await listRejected(crew, { coords })));
+  }
 
   const assignmentFilters = assignmentFiltersForStatuses(wanted);
   if (assignmentFilters.length) {
@@ -738,7 +779,7 @@ async function listByStatuses(crew, { statuses, coords }) {
     );
   }
 
-  if (wanted.length === 1 && (wanted[0] === 'new_request' || wanted[0] === 'completed')) {
+  if (wanted.length === 1 && ['new_request', 'completed', 'rejected'].includes(wanted[0])) {
     return items;
   }
 
@@ -835,6 +876,8 @@ class CrewBookingService {
       items = await listByStatuses(crew, { statuses, coords });
     } else if (tab === 'requests') {
       items = await listOpenRequests(crew, { coords });
+    } else if (tab === 'rejected') {
+      items = await listRejected(crew, { coords });
     } else {
       items = await listMine(crew, { tab, coords });
     }
@@ -854,7 +897,7 @@ class CrewBookingService {
       select: { id: true },
     });
     assertVisibleToCrew(booking, crew, assignment, rejected);
-    return serializeDetails(booking, { crew, assignment, coords });
+    return serializeDetails(booking, { crew, assignment, coords, rejected: Boolean(rejected) });
   }
 
   async accept(crewId, bookingId) {
@@ -865,13 +908,6 @@ class CrewBookingService {
     });
     if (existing && SLOT_STATUSES.includes(existing.status)) {
       throw ApiError.conflict('You have already accepted this job', { code: 'JOB_ALREADY_ACCEPTED' });
-    }
-
-    const rejected = await prisma.crewJobRejection.findUnique({
-      where: { bookingId_crewId: { bookingId, crewId } },
-    });
-    if (rejected) {
-      throw ApiError.conflict('You have already rejected this job', { code: 'JOB_ALREADY_REJECTED' });
     }
 
     const assignment = await prisma.$transaction(async (tx) => {
@@ -906,6 +942,10 @@ class CrewBookingService {
           throw ApiError.conflict('You are marked off on this date', { code: 'DATE_BLOCKED' });
         }
       }
+
+      await tx.crewJobRejection.deleteMany({
+        where: { bookingId, crewId: crew.id },
+      });
 
       return createConfirmedAssignment(tx, {
         booking,

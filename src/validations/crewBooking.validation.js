@@ -1,6 +1,6 @@
 import Joi from 'joi';
 
-const CREW_LIST_STATUSES = ['new_request', 'accepted', 'in_progress', 'completed', 'cancelled'];
+const CREW_LIST_STATUSES = ['new_request', 'accepted', 'in_progress', 'completed', 'cancelled', 'rejected'];
 
 const pagination = {
   page: Joi.number().integer().min(1).default(1),
@@ -40,7 +40,7 @@ export const listBookings = {
   query: Joi.object({
     ...pagination,
     ...coords,
-    tab: Joi.string().valid('requests', 'upcoming', 'active', 'completed').default('requests'),
+    tab: Joi.string().valid('requests', 'upcoming', 'active', 'completed', 'rejected').default('requests'),
     status: Joi.any().custom(statusQuery),
   }).and('latitude', 'longitude'),
 };

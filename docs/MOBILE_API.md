@@ -108,6 +108,7 @@ Use this to wire screens that already exist in design.
 | Detail Order | `GET /crew/bookings/:id` |
 | Accept Job | `POST /crew/bookings/:id/accept` |
 | Reject | `POST /crew/bookings/:id/reject` |
+| Rejected orders | `GET /crew/bookings?tab=rejected` then the same detail and accept calls |
 | Order Accepted / Start Shift | `GET /crew/bookings/:id`. Open the OTP screen only when `actions.canStartShift` is true |
 | Shift OTP | `POST /crew/bookings/:id/start` with `{ "code" }`. The organizer issues it for a supervisor, a waiter when there is no supervisor, or a bouncer. A supervisor issues it for their waiters. There is no crew resend |
 | Supervisor — validate waiters | After this supervisor’s shift is in progress, `team.canValidate` is true. Issue a code with `POST /crew/bookings/:id/team/:assignmentId/otp` |
@@ -1448,7 +1449,7 @@ After an organizer confirms a booking (`POST /users/bookings/:id/payment-verify`
 
 Example below: waiter organizer price ₹800 at 70% is stored as ₹560, so every crew pay field is 560.
 
-Crew-facing `status` values: `new_request` → `accepted` → `in_progress` → `completed` (or `cancelled`).
+Crew-facing `status` values: `new_request` → `accepted` → `in_progress` → `completed` (or `cancelled`). A job this crew member rejected is `rejected` until they accept it.
 
 Shift start is per person. The organizer issues a code for each supervisor (or, when the booking has no supervisors, for each waiter) from Order Details. Accepted bouncers are on that same table whenever the booking includes them, and the organizer issues their code the same way. A supervisor whose own shift is already in progress then issues a code for each waiter assigned to them. A bouncer does not issue codes for anyone else (`team` stays `null`). The crew member types that code on Start Shift. The code is returned only to the person who issued it. It is never returned on the crew member’s own payload.
 
@@ -1510,12 +1511,14 @@ Paginated list. Query:
 
 | Param | Notes |
 |---|---|
-| `tab` | Used when `status` is omitted. `requests` (default, Home feed), `upcoming` (accepted, not started, including a booking cancelled after accept), `active` (in progress), `completed` |
-| `status` | Repeat the query key, or send a comma-separated list. Crew-facing values: `new_request`, `accepted`, `in_progress`, `completed`, `cancelled`. Example: `?status=accepted&status=cancelled`. When `status` is present it replaces `tab`. **400 `VALIDATION_ERROR`** for an unknown value |
+| `tab` | Used when `status` is omitted. `requests` (default, Home feed), `upcoming` (accepted, not started, including a booking cancelled after accept), `active` (in progress), `completed`, `rejected` (jobs this crew member rejected that they can still take) |
+| `status` | Repeat the query key, or send a comma-separated list. Crew-facing values: `new_request`, `accepted`, `in_progress`, `completed`, `cancelled`, `rejected`. Example: `?status=accepted&status=cancelled`. When `status` is present it replaces `tab`. **400 `VALIDATION_ERROR`** for an unknown value |
 | `page` / `limit` | Pagination (default 1 / 20, max 100) |
 | `latitude` / `longitude` | Optional pair for `distanceKm` |
 
-`data` is an array of the same card shape as `requests` above. `meta` is `{ page, limit, total, totalPages }`. A multi-status list is ordered by event date, then start time. `status=new_request` alone keeps the requests order. `status=completed` alone is newest completion first.
+`data` is an array of the same card shape as `requests` above. `meta` is `{ page, limit, total, totalPages }`. A multi-status list is ordered by event date, then start time. `status=new_request` alone keeps the requests order. `status=completed` alone is newest completion first. `tab=rejected` and `status=rejected` alone are newest rejection first.
+
+`rejected` is a job this crew member already rejected. The card `status` is `"rejected"`. The list includes it only while the booking is still `confirmed`, the event date is today or later, their role still has an open slot, and they are not on time off or already booked that day. A rejected job that has filled, been cancelled, or passed is omitted. Rejected jobs stay off `GET /crew/home` and off `tab=requests`.
 
 `accepted` is an assignment that is not cancelled. `cancelled` is an accepted job whose booking was later cancelled: `status: "cancelled"` and `bookingStatus: "cancelled"`. Show that badge on the accepted-jobs screen. `tab=upcoming` still returns both of those together. Opening a cancelled card returns `requestStatusLabel: "CANCELLED"`. Accept, reject, and shift start stay unavailable.
 
@@ -1586,7 +1589,7 @@ Detail Order / Order Accepted / Shift In Progress / Shift Completed. Same card f
 }
 ```
 
-Drive the footer from `actions`. `shift.otpIssued` becomes true once a code has been issued for this crew member (it stays true after the shift starts). `canStartShift` / `canVerifyStart` are true only while `status` is `accepted`, the booking is not cancelled, and a code is waiting. Do not open the OTP screen before that. The code itself is not in this payload.
+Drive the footer from `actions`. On a rejected job, `status` is `"rejected"`, `requestStatusLabel` is `"REJECTED"`, `actions.canAccept` is true while the booking is still `confirmed` with an open slot for this role, and `actions.canReject` is false. `shift.otpIssued` becomes true once a code has been issued for this crew member (it stays true after the shift starts). `canStartShift` / `canVerifyStart` are true only while `status` is `accepted`, the booking is not cancelled, and a code is waiting. Do not open the OTP screen before that. The code itself is not in this payload.
 
 `team` is `null` unless this crew member is a supervisor on the booking. For a supervisor:
 
@@ -1601,7 +1604,7 @@ After verify, poll this endpoint for the timer (`elapsedSeconds` / `remainingSec
 
 On **completed**, `payout` and `performance` are filled (rating comes from the organizer’s review when present). `payout.total` and `payout.baseEarnings` are the same stored crew amount shown while picking the job.
 
-**404 `BOOKING_NOT_FOUND`** if it is not an open job for this crew’s role and they have no assignment on it.
+**404 `BOOKING_NOT_FOUND`** if it is not an open job for this crew’s role, they have no assignment on it, and they have not rejected it. A job they rejected is returned with `status: "rejected"`.
 
 ### `POST /crew/bookings/:id/accept`
 
@@ -1609,13 +1612,15 @@ No body. Creates a `self_assigned` assignment, blocks that event date, and fills
 
 If the booking has supervisors, accept also fills waiter quotas: a supervisor claims the next open slot and pulls already-accepted unassigned waiters up to that quota; a waiter is attached to the earliest claimed slot that still has room, or left unassigned if none does.
 
-**409** `JOB_FULL` / `JOB_NOT_AVAILABLE` / `JOB_ALREADY_ACCEPTED` / `JOB_ALREADY_REJECTED` / `DATE_BLOCKED` / `BOOKING_CANCELLED`.
+Accepting a job this crew member previously rejected clears that rejection in the same step. A failed accept leaves the rejection in place, so the job stays on `tab=rejected`.
+
+**409** `JOB_FULL` / `JOB_NOT_AVAILABLE` / `JOB_ALREADY_ACCEPTED` / `DATE_BLOCKED` / `BOOKING_CANCELLED`.
 
 Response is the same detail payload (`status: "accepted"`).
 
 ### `POST /crew/bookings/:id/reject`
 
-No body. Hides the job from this crew’s feed. **409 `JOB_ALREADY_ACCEPTED`** if they already took it.
+No body. Removes the job from this crew’s request feed and adds it to `GET /crew/bookings?tab=rejected` while it can still be accepted. **409 `JOB_ALREADY_ACCEPTED`** if they already took it. **409 `JOB_ALREADY_REJECTED`** if they already rejected it.
 
 ```json
 { "data": { "id": 12, "rejected": true } }
@@ -1712,6 +1717,9 @@ GET /crew/me
     New Job Requests → GET /crew/home (or GET /crew/bookings?tab=requests)
     Detail Order → GET /crew/bookings/:id
     Accept / Reject → POST /crew/bookings/:id/accept | reject
+    Rejected orders → GET /crew/bookings?tab=rejected
+      open one → GET /crew/bookings/:id (status rejected, actions.canAccept)
+      accept later → POST /crew/bookings/:id/accept
     Start Shift OTP → POST /crew/bookings/:id/start { code }
       only when actions.canStartShift (a code was issued for this person)
     Supervisor validates waiters → POST /crew/bookings/:id/team/:assignmentId/otp
@@ -1833,7 +1841,8 @@ Delete Account → DELETE /users/me
 - [ ] Pay with `POST /users/bookings/:id/payment-order`, open Razorpay Checkout using `keyId` / `orderId` / `amount` (paise), then `POST /users/bookings/:id/payment-verify`. Do not ship the Razorpay key secret in the app. Do not start checkout again while `paymentStatus` is `initiated` or `processing`. If verify never returns, read All Bookings or the booking detail — the webhook may already have confirmed it
 - [ ] Crew Home: `GET /crew/home` shows `requests` whether the crew member is online or offline. `PATCH /crew/me/online` only updates stored status.
 - [ ] Crew job `id` is the integer booking id; `orderId` / `bookingReference` is the human code on the header
-- [ ] Crew order lists: `GET /crew/bookings?tab=` still works. To load more than one section, repeat `status` (`accepted`, `cancelled`, `in_progress`, `completed`, `new_request`), for example `?status=accepted&status=cancelled`
+- [ ] Crew order lists: `GET /crew/bookings?tab=` still works (`requests`, `upcoming`, `active`, `completed`, `rejected`). To load more than one section, repeat `status` (`accepted`, `cancelled`, `in_progress`, `completed`, `new_request`, `rejected`), for example `?status=accepted&status=cancelled`
+- [ ] Rejected orders: `GET /crew/bookings?tab=rejected`. Open with `GET /crew/bookings/:id` (`status: "rejected"`, `actions.canAccept`). Accept with the same `POST /crew/bookings/:id/accept`. These jobs are not on Home or `tab=requests`
 - [ ] Crew pay (`estimatedEarnings`, `pay`, and completed `payout`) is the amount stored on that booking for this crew member. Later admin percentage changes do not change it. Do not treat it as the organizer’s price
 - [ ] Accept / Reject / Start / Complete use `POST /crew/bookings/:id/…`. The shift code is per person, not the login OTP and not a booking-wide `shiftOtp`
 - [ ] Organizer Order Details: render `shiftValidation.rows`. Supervisors when `mode` is `supervisors`, waiters when `mode` is `waiters`, bouncers when `mode` is `bouncers`. Also render bouncer rows on a supervisors or waiters table when the order includes bouncers. OTP button calls `POST /users/bookings/:id/assignments/:assignmentId/otp` and shows the returned `otp`. A bouncer does not validate other crew
