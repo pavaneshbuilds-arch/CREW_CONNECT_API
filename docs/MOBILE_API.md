@@ -436,6 +436,7 @@ There is no send endpoint. The API stores a `notifications` row, and the backgro
 | `crew_on_the_way` | User | A crew member starts the shift |
 | `rate_experience` | User | The booking is completed |
 | `booking_cancelled` | Crew | The organizer cancels an accepted job |
+| `booking_expired` | User | A `created` checkout is still unpaid after 30 minutes |
 | `reminder` | User and assigned crew | 1 day before, and 2 hours before, the event |
 | `profile_approved` / `profile_rejected` | Crew | Verification or a profile edit is reviewed |
 
@@ -795,7 +796,7 @@ Copy a selected row into:
 
 All routes: Bearer + token `type` must be `"user"`.
 
-The cart holds **one** `cart` draft per user. That draft has no payment, so a new summary replaces it. Completing the three booking steps calls summary; Cart reads that draft. Proceed To Pay creates a Razorpay order, sets the booking to `created`, and moves it out of the cart into All Bookings. Verify or the webhook then sets it to `confirmed`. No booking-wide shift code is created.
+The cart holds **one** `cart` draft per user. That draft has no payment, so a new summary replaces it. Completing the three booking steps calls summary; Cart reads that draft. Proceed To Pay creates a Razorpay order, sets the booking to `created`, and moves it out of the cart into All Bookings. Verify or the webhook then sets it to `confirmed`. If the latest payment stays `initiated` or `failed` for **30 minutes**, the booking becomes `expired` and moves to Past Bookings. A new checkout attempt after a failure restarts those 30 minutes. A payment Razorpay has authorized (`processing`) or captured (`success`) is not expired. No booking-wide shift code is created.
 
 Pricing is computed on the server (do not send rates or totals):
 
@@ -1048,7 +1049,7 @@ My Bookings list. Query:
 
 | Param | Notes |
 |---|---|
-| `tab` | `current` (default, My Bookings) = `confirmed`, `crew_assigned`, `in_progress`. `past` = `completed`, `cancelled`. `all` = every status except `cart`, including `created` |
+| `tab` | `current` (default, My Bookings) = `confirmed`, `crew_assigned`, `in_progress`. `past` = `completed`, `cancelled`, `expired`. `all` = every status except `cart`, including `created` and `expired` |
 | `page` / `limit` | Pagination (default 1 / 20, max 100) |
 | `latitude` / `longitude` | Optional pair; when both sent, `distanceKm` is Haversine vs venue |
 
@@ -1780,7 +1781,7 @@ Pay → POST /users/bookings/:id/payment-order
   → if verify never returns, GET /users/bookings/:id (webhook may already have confirmed)
 My Bookings → GET /users/bookings?tab=current
 Past Bookings → GET /users/bookings?tab=past
-All Bookings → GET /users/bookings?tab=all   (created checkouts live here, not in the cart)
+All Bookings → GET /users/bookings?tab=all   (created checkouts live here, not in the cart; unpaid ones become expired after 30 minutes and move to past)
 Order Details → GET /users/bookings/:id
   shiftValidation.mode supervisors → OTP each supervisor row
   shiftValidation.mode waiters → OTP each waiter row
@@ -1826,7 +1827,7 @@ Delete Account → DELETE /users/me
 - [ ] Crew complaints: load reasons and orders first (`GET /crew/complaints/reasons`, `GET /crew/complaints/orders`). Submit with `bookingId` from the picker. Images use `purpose=complaint_image`
 - [ ] For emulator, point `PUBLIC_BASE_URL` at `http://10.0.2.2:4000` so image URLs load
 - [ ] Do not display full Aadhaar / account number (API will not return them)
-- [ ] Booking cart is a single `cart` draft with no payment; `PUT /users/bookings/summary` creates and replaces only that draft. A `created` checkout is listed with `GET /users/bookings?tab=all`
+- [ ] Booking cart is a single `cart` draft with no payment; `PUT /users/bookings/summary` creates and replaces only that draft. A `created` checkout is listed with `GET /users/bookings?tab=all`. After 30 minutes unpaid it becomes `expired` and is listed with `tab=past` (`type` `booking_expired`, screen `booking_details`)
 - [ ] Quote screen shows CGST and SGST separately (`cgstPercent` / `cgstAmount`, `sgstPercent` / `sgstAmount`). `gstAmount` is their sum. Do not send tax from the app; it is snapshotted when the cart is saved
 - [ ] Venue picker: `GET /users/places/search?q=` then copy `name` / `address` / `latitude` / `longitude` into summary. Warn if `inServiceArea` is false
 - [ ] Pay with `POST /users/bookings/:id/payment-order`, open Razorpay Checkout using `keyId` / `orderId` / `amount` (paise), then `POST /users/bookings/:id/payment-verify`. Do not ship the Razorpay key secret in the app. Do not start checkout again while `paymentStatus` is `initiated` or `processing`. If verify never returns, read All Bookings or the booking detail — the webhook may already have confirmed it

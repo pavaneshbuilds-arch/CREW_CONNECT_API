@@ -64,6 +64,7 @@ enum BookingStatus {
   in_progress
   completed
   cancelled
+  expired
 }
 
 enum AssignmentMethod {
@@ -177,6 +178,7 @@ enum NotificationType {
   job_accepted
   crew_assigned
   booking_cancelled
+  booking_expired
   profile_approved
   profile_rejected
   payout_processed

@@ -29,7 +29,7 @@ import {
 } from './index.js';
 
 const CURRENT_STATUSES = ['confirmed', 'crew_assigned', 'in_progress'];
-const PAST_STATUSES = ['completed', 'cancelled'];
+const PAST_STATUSES = ['completed', 'cancelled', 'expired'];
 const ALL_STATUSES = ['created', ...CURRENT_STATUSES, ...PAST_STATUSES];
 const IN_FLIGHT_PAYMENT = ['initiated', 'processing'];
 const OTP_VISIBLE_STATUSES = ['confirmed', 'crew_assigned', 'in_progress'];
@@ -397,6 +397,7 @@ function buildTimeline(booking) {
   const crewAssignedAt = firstAssignment?.createdAt || null;
   const crewAssignedDone = ['crew_assigned', 'in_progress', 'completed'].includes(booking.status);
   const cancelled = booking.status === 'cancelled';
+  const expired = booking.status === 'expired';
 
   const steps = [
     { key: 'order_placed', label: 'Order Placed', at: booking.createdAt, done: true },
@@ -425,6 +426,15 @@ function buildTimeline(booking) {
       key: 'cancelled',
       label: 'Cancelled',
       at: booking.cancelledAt,
+      done: true,
+    });
+  }
+
+  if (expired) {
+    steps.push({
+      key: 'expired',
+      label: 'Payment expired',
+      at: booking.updatedAt,
       done: true,
     });
   }

@@ -77,7 +77,8 @@ export const listBookings = {
       'crew_assigned',
       'in_progress',
       'completed',
-      'cancelled'
+      'cancelled',
+      'expired'
     ),
     eventDateFrom: Joi.date().iso(),
     eventDateTo: Joi.date().iso(),

@@ -816,6 +816,7 @@ class AdminService {
           }
         : null,
       advancePaidPct: decimal(booking.advancePaidPct),
+      confirmedAt: booking.confirmedAt,
       cancelledAt: booking.cancelledAt,
       cancellationReason: booking.cancellationReason,
       crewRequirements: booking.crewRequirements.map((r) => {
@@ -854,6 +855,7 @@ class AdminService {
         amount: decimal(p.amount),
         status: p.status,
         paymentGatewayRef: p.paymentGatewayRef,
+        razorpayOrderId: p.razorpayOrderId,
         paidAt: p.paidAt,
         createdAt: p.createdAt,
       })),
@@ -862,6 +864,7 @@ class AdminService {
         paymentId: r.paymentId,
         refundAmount: decimal(r.refundAmount),
         refundPctApplied: decimal(r.refundPctApplied),
+        cancellationDaysBeforeEvent: decimal(r.cancellationDaysBeforeEvent),
         status: r.status,
         razorpayRefundId: r.razorpayRefundId,
         createdAt: r.createdAt,

@@ -174,7 +174,7 @@ class NotificationService {
         where: { id: bookingId },
         include: { crewRequirements: true },
       });
-      if (!booking || ['cart', 'created', 'cancelled'].includes(booking.status)) return;
+      if (!booking || ['cart', 'created', 'cancelled', 'expired'].includes(booking.status)) return;
 
       const bookingData = {
         bookingId: booking.id,

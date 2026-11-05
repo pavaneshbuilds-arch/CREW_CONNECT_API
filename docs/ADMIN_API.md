@@ -207,11 +207,11 @@ Read-only in this release (assignment / payment actions come later).
 
 ### `GET /admin/bookings`
 
-Query: `search` (reference, venue, organizer name/phone), `status`, `eventDateFrom`, `eventDateTo`.
+Query: `search` (reference, venue, organizer name/phone), `status` (`cart`, `created`, `confirmed`, `crew_assigned`, `in_progress`, `completed`, `cancelled`, `expired`), `eventDateFrom`, `eventDateTo`. A `created` checkout that is still unpaid after 30 minutes becomes `expired`. That is not a cancellation: `cancelledAt` and `cancellationReason` stay empty.
 
 ### `GET /admin/bookings/:id`
 
-Includes requirements, assignments, payments, refunds, and the applied `coupon` (`id`, `code`, `discountType`, `discountValue`) when present. Each refund includes `razorpayRefundId` (null until Razorpay accepts the cancellation refund). Each requirement has `rate` (fixed per person charged to the organizer) and `amount` (`countRequired × rate`). It also has the snapshotted `crewSharePercent`, `crewAmount` (what one crew member of that role is paid), and `crewPayout` (`countRequired × crewAmount`). Those crew figures are written when the booking is quoted and do not change if the rate card percentage is edited later. Tax is the snapshotted `cgstPercent`, `sgstPercent`, `cgstAmount`, `sgstAmount`, and `gstAmount` (`cgstAmount + sgstAmount`). `expectedDurationHours` is the shift length only.
+Includes requirements, assignments, payments, refunds, and the applied `coupon` (`id`, `code`, `discountType`, `discountValue`) when present. The booking includes `createdAt`, `confirmedAt` (null until payment confirms it), and `advancePaidPct`. A cancelled booking also includes `cancelledAt` and `cancellationReason`. Each payment includes `paymentGatewayRef` (the Razorpay payment id, null until capture) and `razorpayOrderId`. Each refund includes `refundAmount`, `refundPctApplied`, `cancellationDaysBeforeEvent`, `status` (`pending`, `processed`, or `failed`), and `razorpayRefundId` (null until Razorpay accepts the cancellation refund). Each requirement has `rate` (fixed per person charged to the organizer) and `amount` (`countRequired × rate`). It also has the snapshotted `crewSharePercent`, `crewAmount` (what one crew member of that role is paid), and `crewPayout` (`countRequired × crewAmount`). Those crew figures are written when the booking is quoted and do not change if the rate card percentage is edited later. Tax is the snapshotted `cgstPercent`, `sgstPercent`, `cgstAmount`, `sgstAmount`, and `gstAmount` (`cgstAmount + sgstAmount`). `expectedDurationHours` is the shift length only.
 
 ---
 
@@ -225,7 +225,7 @@ Admin CRUD for offers shown on `GET /users/coupons` and applied on a cart via `P
 | `discountValue` | ₹ amount, or 0–100 for percentage |
 | `minSpend` | Optional minimum subtotal |
 | `maxDiscountAmount` | Optional cap (percentage “upto ₹X”; also caps a flat discount if set) |
-| `maxUses` | Optional global redemption limit. `null` = unlimited. Counted on **placed** bookings (`status` is not `cart` or `created`), including later cancellations |
+| `maxUses` | Optional global redemption limit. `null` = unlimited. Counted on **placed** bookings (`status` is not `cart`, `created`, or `expired`), including later cancellations |
 | `maxUsesPerUser` | Optional per-organizer limit. `1` = one-time use per user |
 | `usedCount` | How many placed bookings have redeemed this code |
 
