@@ -157,7 +157,7 @@ User (organizer) app: **login + Google + profile + addresses + settings + bookin
 | Help & Support | `GET /users/support` |
 | Home — What Our Clients Say | `GET /users/home/reviews` |
 | Home — Most Popular | `GET /users/home/top-crew?role=waiter` (or `supervisor` / `bouncer`) |
-| Tell Us About Your Event / Choose Your Crew | `GET /users/bookings/options` then `GET /users/bookings/crew-suggestion` |
+| Tell Us About Your Event / Choose Your Crew | `GET /users/bookings/options` then `GET /users/bookings/crew-suggestion?guestCount=&foodServiceType=&foodItemsCount=` |
 | Confirm Your Booking | `GET /users/places/search?q=` to pick a venue, then `PUT /users/bookings/summary` (creates the cart draft + pricing) |
 | Cart | `GET /users/cart`. Edit → same `PUT /users/bookings/summary` with `id`. Apply/remove offer → coupon endpoints |
 | Proceed To Pay | `POST /users/bookings/:id/payment-order`, then Razorpay Checkout, then `POST /users/bookings/:id/payment-verify` |
@@ -831,7 +831,7 @@ Dropdowns and rate card for steps 1–2. `rates` are the fixed per-person event 
     "cgstPercent": 9,
     "sgstPercent": 9,
     "gstPercent": 18,
-    "coverRatio": 20,
+    "coverRatio": 50,
     "supervisorRanges": [
       { "id": 1, "minWaiters": 5, "maxWaiters": 10, "supervisorCount": 1 },
       { "id": 2, "minWaiters": 11, "maxWaiters": 19, "supervisorCount": 2 },
@@ -854,22 +854,29 @@ Dropdowns and rate card for steps 1–2. `rates` are the fixed per-person event 
 
 ### `GET /users/bookings/crew-suggestion`
 
-Smart Suggestion overlay (before save). Query: `guestCount` (required), `foodItemsCount` (optional).
+Smart Suggestion overlay (before save). Query: `guestCount` (required), `foodServiceType` (required, one of `foodServiceTypes`), `foodItemsCount` (required, integer 0–500).
 
-Waiters = `ceil(guestCount / coverRatio)` (min 1). Supervisor count is looked up from admin **waiter ranges** (`PUT /admin/supervisor-ranges`): match waiter count against `minWaiters`–`maxWaiters` (`maxWaiters: null` = that count and above). Supervisors are **added on top of** waiters, not taken from them. Bouncers are not auto-suggested — the organizer can add as many as they want (default 0). Below the first range, supervisors are 0.
+Waiters depend on the food service, and the result is at least 1:
+
+- **Plated Dining:** the higher of `ceil(guestCount / coverRatio)` and `foodItemsCount`. `coverRatio` is 50 (one waiter per 50 guests).
+- **Buffet, Cocktail, Family Style, Live Counter:** `ceil(foodItemsCount × 1.5)`. Guest count is not used.
+
+Supervisor count is looked up from admin **waiter ranges** (`PUT /admin/supervisor-ranges`): match that waiter count against `minWaiters`–`maxWaiters` (`maxWaiters: null` = that count and above). Supervisors are **added on top of** waiters, not taken from them. Bouncers are not auto-suggested — the organizer can add as many as they want (default 0). Below the first range, supervisors are 0. `coverRatio` in the response is always `1:50`; other services do not use it. Saving the cart does not recompute waiters — send `recommended.waiter`.
 
 ```json
 {
   "data": {
     "guestCount": 100,
     "foodItemsCount": 5,
-    "coverRatio": "1:20",
+    "coverRatio": "1:50",
     "totalPersonnel": 6,
     "recommended": { "waiter": 5, "supervisor": 1, "bouncer": 0 },
     "message": "Based on 100 guests and 5 food items, we recommend at least 5 Waiters and 1 Supervisor."
   }
 }
 ```
+
+That example is Plated Dining: `max(ceil(100 / 50), 5)` = 5 waiters, which falls in the 5–10 waiter band (1 supervisor). A buffet with 5 food items is `ceil(5 × 1.5)` = 8 waiters, regardless of guest count.
 
 ### `PUT /users/bookings/summary`
 
@@ -1779,7 +1786,7 @@ Addresses → GET/POST/PATCH/DELETE /users/me/addresses
 Settings → PATCH /users/me { locationAccessEnabled, pushNotificationsEnabled, marketingOptIn }
 Coupons → GET /users/coupons
 Help → GET /users/support
-Book event → GET /users/bookings/options + GET /users/bookings/crew-suggestion
+Book event → GET /users/bookings/options + GET /users/bookings/crew-suggestion?guestCount=&foodServiceType=&foodItemsCount=
   → GET /users/places/search?q=  (venue)
   → PUT /users/bookings/summary  (venueName, venueAddress, venueLatitude, venueLongitude from Places)
 Cart → GET /users/cart  (edit: PUT /users/bookings/summary; coupon: POST/DELETE /users/bookings/:id/coupon)
@@ -1835,6 +1842,7 @@ Delete Account → DELETE /users/me
 - [ ] Crew complaints: load reasons and orders first (`GET /crew/complaints/reasons`, `GET /crew/complaints/orders`). Submit with `bookingId` from the picker. Images use `purpose=complaint_image`
 - [ ] For emulator, point `PUBLIC_BASE_URL` at `http://10.0.2.2:4000` so image URLs load
 - [ ] Do not display full Aadhaar / account number (API will not return them)
+- [ ] Crew suggestion: `GET /users/bookings/crew-suggestion` with `guestCount`, `foodServiceType`, and `foodItemsCount`. Use `recommended.waiter` (Plated Dining is the higher of one waiter per 50 guests and the food-item count; other services are `ceil(foodItemsCount × 1.5)`). Do not compute waiters as `guestCount / 20`
 - [ ] Booking cart is a single `cart` draft with no payment; `PUT /users/bookings/summary` creates and replaces only that draft. A `created` checkout is listed with `GET /users/bookings?tab=all`. After 30 minutes unpaid it becomes `expired` and is listed with `tab=past` (`type` `booking_expired`, screen `booking_details`)
 - [ ] Quote screen shows CGST and SGST separately (`cgstPercent` / `cgstAmount`, `sgstPercent` / `sgstAmount`). `gstAmount` is their sum. Do not send tax from the app; it is snapshotted when the cart is saved
 - [ ] Venue picker: `GET /users/places/search?q=` then copy `name` / `address` / `latitude` / `longitude` into summary. Warn if `inServiceArea` is false

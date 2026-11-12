@@ -26,7 +26,10 @@ const crewCounts = Joi.object({
 export const crewSuggestion = {
   query: Joi.object({
     guestCount: Joi.number().integer().min(1).max(10000).required(),
-    foodItemsCount: Joi.number().integer().min(0).max(500),
+    foodServiceType: Joi.string()
+      .valid(...FOOD_SERVICE_TYPES)
+      .required(),
+    foodItemsCount: Joi.number().integer().min(0).max(500).required(),
   }),
 };
 

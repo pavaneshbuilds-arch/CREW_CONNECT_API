@@ -1050,9 +1050,9 @@ class BookingService {
     };
   }
 
-  async getCrewSuggestion({ guestCount, foodItemsCount }) {
+  async getCrewSuggestion({ guestCount, foodItemsCount, foodServiceType }) {
     const ranges = await supervisorRangeService.list();
-    const suggestion = suggestCrew(guestCount, ranges);
+    const suggestion = suggestCrew({ guestCount, foodItemsCount, foodServiceType }, ranges);
     const foodNote =
       foodItemsCount != null ? ` and ${foodItemsCount} food item${foodItemsCount === 1 ? '' : 's'}` : '';
     const waiterLabel = `${suggestion.waiter} ${roleLabel('waiter', suggestion.waiter)}`;

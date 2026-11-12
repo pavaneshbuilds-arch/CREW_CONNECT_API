@@ -36,7 +36,7 @@ export const DEFAULT_CREW_SHARE_PERCENT = 100;
 
 export const CREW_ROLES = ['waiter', 'supervisor', 'bouncer'];
 
-export const COVER_RATIO = 20;
+export const COVER_RATIO = 50;
 
 export const ROLE_LABELS = {
   waiter: { singular: 'Waiter', plural: 'Waiters' },
@@ -124,9 +124,14 @@ export function supervisorCountForWaiters(waiterCount, ranges = []) {
   return 0;
 }
 
-export function suggestCrew(guestCount, ranges = []) {
+export function suggestCrew({ guestCount, foodItemsCount, foodServiceType }, ranges = []) {
   const guests = Math.max(1, Number(guestCount) || 1);
-  const waiter = Math.max(1, Math.ceil(guests / COVER_RATIO));
+  const items = Math.max(0, Number(foodItemsCount) || 0);
+  const fromGuests = Math.ceil(guests / COVER_RATIO);
+  const waiter =
+    foodServiceType === 'Plated Dining'
+      ? Math.max(1, fromGuests, items)
+      : Math.max(1, Math.ceil(items * 1.5));
   const supervisor = supervisorCountForWaiters(waiter, ranges);
   return {
     waiter,

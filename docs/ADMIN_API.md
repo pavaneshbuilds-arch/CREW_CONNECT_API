@@ -347,7 +347,7 @@ Paginated history, newest first. Query: `role` (`waiter` \| `supervisor` \| `bou
 
 ## 8c. Supervisor staffing ranges
 
-Used by `GET /users/bookings/crew-suggestion`. Waiters = `ceil(guestCount / 20)`. That **waiter** count is matched to a range; the range’s `supervisorCount` is recommended **in addition to** the waiters. Bouncers are not in these ranges — organizers pick any number themselves. Waiter counts below the first range get **0** supervisors. `maxWaiters: null` means that floor and above.
+Used by `GET /users/bookings/crew-suggestion`. Waiters are the higher of `ceil(guestCount / 50)` and the food-item count for Plated Dining, and `ceil(foodItemsCount × 1.5)` for every other food service (at least 1). That **waiter** count is matched to a range; the range’s `supervisorCount` is recommended **in addition to** the waiters. Bouncers are not in these ranges — organizers pick any number themselves. Waiter counts below the first range get **0** supervisors. `maxWaiters: null` means that floor and above.
 
 Defaults after migrate/seed:
 
